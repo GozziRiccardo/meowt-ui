@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HearMeOwT — $MEOWT</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --bg-rose: radial-gradient(1200px 600px at 50% -10%, rgba(244,63,94,.12), transparent 70%),
+               linear-gradient(#fff0f3, #ffe4e8 40%, #ffd8df);
+    --ink: #111216;
+    --ink-soft:#30323a;
+    --accent:#f43f5e; /* RED for bold text */
+    --paper: rgba(255,255,255,0.85);
+    --ring: rgba(244,63,94,0.25);
+  }
+  *{ box-sizing:border-box; }
+  html, body{
+    margin:0; padding:0;
+    color: var(--ink);
+    font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Apple Color Emoji","Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+    background: var(--bg-rose);
+    scroll-behavior: smooth;
+  }
+  /* make ALL bold text red */
+  b, strong { color: var(--accent); font-weight: 800; }
+
+  .title{ font-family: Outfit, Inter, sans-serif; font-weight:800; letter-spacing:.2px; }
+  .subtitle{ font-weight:600; color:#7a2432; }
+
+  .page{
+    min-height: 100vh; display:flex; align-items:center; justify-content:center;
+    position:relative; padding: 48px 20px 64px; overflow:hidden;
+  }
+  .page-inner{
+    width: min(900px, 92vw);
+    background: var(--paper);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--ring);
+    box-shadow: 0 24px 80px rgba(244,63,94,0.15), 0 6px 24px rgba(17,18,22,0.08);
+    border-radius: 28px;
+    padding: clamp(22px, 5vw, 40px);
+    position:relative;
+    z-index:1; /* over mascots */
+  }
+
+  h1{ margin: 0 0 10px 0; font-size: clamp(28px, 4vw, 44px); line-height:1.1; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
+  h2{ margin: 0 0 16px 0; font-size: clamp(18px, 2.6vw, 22px); line-height:1.25; color: var(--accent); }
+
+  .logo{ height: 36px; width:auto; vertical-align:middle; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.12)); display:inline-block; }
+  .logo-inline{ height: .95em; width:auto; vertical-align: -.18em; margin-left: .28em; filter: drop-shadow(0 1px 2px rgba(0,0,0,.15)); }
+
+  p{ font-size: clamp(15px, 2.1vw, 18px); line-height:1.6; margin: 12px 0; }
+  .em{ font-family: Outfit, Inter, sans-serif; font-weight:800; letter-spacing:.2px; color: var(--accent); }
+
+  .cards{ display:grid; grid-template-columns: repeat(12, 1fr); gap: 14px; margin-top: 14px; }
+  .card{
+    grid-column: span 12; background:#fff; border:1px solid rgba(17,18,22,0.08);
+    border-radius:18px; padding: clamp(14px, 2.6vw, 18px); box-shadow: 0 10px 26px rgba(17,18,22,0.05);
+  }
+  .card h3{ margin:0 0 8px 0; font-size:clamp(16px, 2.3vw, 20px); font-weight:800; color: var(--ink); }
+  .meta{ display:flex; flex-wrap:wrap; gap:6px 10px; margin: 8px 0 6px; font-size:13px; color:#6b6f78; }
+  .pill{
+    border:1px solid rgba(244,63,94,0.25); color:#7a2432; background:rgba(255,245,247,.8);
+    padding:3px 8px; border-radius:999px; font-weight:700;
+  }
+
+  /* math & summary boxes */
+  .formula, .summary{
+    margin-top:10px; border:1px dashed rgba(17,18,22,0.15); background:#fff7f9;
+    border-radius:14px; padding:12px 14px;
+  }
+  .formula code{
+    display:block; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size:13px; white-space:pre-wrap;
+  }
+  .summary h4{
+    margin:0 0 8px 0; font-size:14px; font-weight:800; color:#7a2432;
+  }
+  .summary table{
+    width:100%; border-collapse:collapse; font-size:13px;
+    margin-bottom: 6px; /* tiny spacing under table */
+  }
+  .summary th, .summary td{
+    text-align:left; padding:6px 8px; border-bottom:1px dashed rgba(17,18,22,0.12);
+  }
+  .summary tr:last-child th, .summary tr:last-child td{ border-bottom:none; }
+  .summary .muted{ color:#6b6f78; font-weight:600; }
+
+  /* rose note under summary tables */
+  .summary .note-rose{
+    color: var(--accent);
+    font-weight: 800;
+    margin-top: 10px;
+  }
+
+  .summary table th:nth-child(1){ width: 32%; }
+.summary table th:nth-child(2){ width: 10%; text-align:right; }
+.summary table th:nth-child(3){ width: 22%; text-align:right; }
+.summary table th:nth-child(4){ width: 36%; }
+.summary table td:nth-child(2),
+.summary table td:nth-child(3){ text-align:right; }
+
+
+  /* formula with right-side illustration */
+  .formula.has-illustration{
+    display: grid;
+    grid-template-columns: 1fr minmax(120px, 200px);
+    gap: 14px;
+    align-items: start;
+  }
+  .formula .mascot-math{
+    width: 100%;
+    max-width: 200px;
+    height: auto;
+    border-radius: 12px;
+    display: block;
+  }
+  @media (max-width: 720px){
+    .formula.has-illustration{ display: block; }
+    .formula .mascot-math{
+      max-width: 180px;
+      margin: 8px auto 0;
+    }
+  }
+
+  :root{
+  --math-w: 240px;   /* image size */
+  --math-gap: 5px;  /* spacing between code and image */
+  --math-shift: -100px;/* negative pulls image toward text */
+}
+.formula.has-illustration{
+  grid-template-columns: 1fr var(--math-w);
+  gap: var(--math-gap);
+}
+.formula .mascot-math{
+  max-width: var(--math-w);
+  transform: translateX(var(--math-shift));
+}
+
+
+
+
+  /* remove two-column behavior on large screens (stack vertically) */
+  @media (min-width: 880px){
+    /* intentionally no .span-6 override → all cards stay full width */
+  }
+
+  /* Floating mascots — unchanged */
+  .mascot{
+    position:absolute; z-index:0; opacity:.72;
+    transform: translate(-50%,-50%) rotate(var(--r,0deg));
+    pointer-events:none; user-select:none;
+    filter: drop-shadow(0 6px 12px rgba(244,63,94,0.18));
+  }
+
+  .footer{
+    margin-top: 12px; font-size:12px; color:#6b6f78;
+    display:flex; gap:10px; justify-content:space-between; align-items:center;
+  }
+  .footer .foot-left{ display:flex; align-items:center; gap:8px; }
+  .footer .foot-left img{ height:16px; width:auto; }
+
+  /* Floating TOC */
+  .toc{ position: fixed; right: 20px; bottom: 20px; z-index: 9999; }
+  .toc-inner{
+    display:flex; gap:8px; align-items:center; padding:8px 10px; border-radius:999px;
+    background: rgba(255,255,255,0.88); backdrop-filter: blur(8px);
+    border:1px solid rgba(244,63,94,.25);
+    box-shadow: 0 10px 24px rgba(244,63,94,0.15), 0 2px 6px rgba(0,0,0,0.08);
+  }
+  .toc a{
+    text-decoration:none; font-weight:800; font-size:12px; letter-spacing:.2px; color: var(--ink-soft);
+    padding:6px 10px; border-radius:999px; border:1px solid transparent; display:flex; align-items:center; gap:6px;
+  }
+  .toc a:hover{ background: rgba(244,63,94,.12); border-color: rgba(244,63,94,.25); color: var(--accent); }
+  .toc a.is-active{ background: var(--accent); color:#fff; border-color: transparent; }
+  @media (max-width: 540px){
+    .toc-inner{ padding:6px 8px; gap:6px; } .toc a{ padding:6px 8px; font-weight:700; }
+  }
+
+  @media print{
+    .page{ min-height:auto; page-break-after: always; }
+    .toc{ display:none !important; }
+    body{ background:#fff; }
+    .page-inner{ box-shadow:none; border:0; }
+  }
+</style>
+</head>
+<body>
+
+<!-- PAGE 1 — INTRO (unchanged) -->
+<section id="intro" class="page" data-mascot="intro.png" data-mascot-count="80">
+  <div class="page-inner">
+    <h1 class="title">✨ HearMeOwT
+      <img class="logo" alt="$MEOWT logo" data-logo>
+    </h1>
+    <h2 class="subtitle">A playful, on-chain attention game powered by $MEOWT.</h2>
+
+    <p>In the current time of hyper-connectivity, influencers and social media, everyone’s got something to say. That’s not an issue in itself, but everyone is speaking at the same time: nobody listens anymore. Do you ever find yourself endlessly scrolling through feeds, hunting for anything with real meaning? Something that feels different and original?</p>
+    <p>Platforms like Facebook, Twitter, Instagram, TikTok, Reddit all produce tons of content every second. It’s no surprise the value of each voice gets hopelessly diluted. That’s when a cool cat like you needs to scream: <strong>HearMeOwT!</strong></p>
+    <p><span class="em">HearMeOwT</span> is a playful billboard where only one post is live at a time. Think of it as a megaphone always ready, right in front of your mouth. By staking the $MEOWT token you book a time slot for your post; the crowd votes by liking or disliking it, and anyone can try to replace it by staking higher. There are three ways a post can resolve: it can expire with time, be replaced by a new challenger, or get nuked if the dislikes dominate (as it usually happens to your birthday pictures on Instagram 🎂🙈). <strong>Boosts</strong> add bursts of visibility and temporarily protect from replacements. If time runs out without a replacement, your message gets crowned: other cats finally heard your voice.</p>
+    <p>As if that wasn’t enough, here comes the catch - there’s a whole other layer: <strong>incentives</strong>. Honor and attention feel nice, but they don’t fill your belly. For the materialists among us: you can also play to earn.</p>
+    <p>Each post has its own <strong>pot</strong>, first seeded from a small percentage of the initial stake, then buffed by engagement from boosts and votes. When the message resolves, the pot gets distributed: part to the author, part to the majority voters, part to treasury (with burn). The split depends on how the post ends. Time expiration rewards the author more; nuking rewards the house more; replacements carry part of the old pot into the new one. No matter what, someone leaves with fresh, shiny $MEOWT in their pocket. And it’s not just at resolution: authors and boosters receive immediate tips on each like -real time, right now- taken directly from voting fees.</p>
+    <p>Blend these two components and you get a fun, <strong>self-funding loop</strong>: attention drives fees → fees grow the pot → the pot funds rewards → and the next challenger inherits part of that energy.</p>
+    <p>That’s it. Ready to post? Or worried for your precious tokens? That’s fair; words only go so far. Everything above is <strong>formula-based and on-chain</strong>; there are no hidden knobs and every rule is parameterized. For the full picture -parameters, equations, and all the nerdy bits- jump to the sections below.</p>
+
+    <div class="footer">
+      <span class="foot-left"><img alt="$MEOWT" class="foot-logo" data-logo/> v1.0 (Draft) • Base Sepolia prototype</span>
+      <span>© HearMeOwT</span>
+    </div>
+  </div>
+</section>
+
+<!-- PAGE 2 — MECHANICS -->
+<section id="mechanics" class="page" data-mascot="mechanics.png" data-mascot-count="84">
+  <div class="page-inner">
+    <h1 class="title">⚙️ Mechanics & Parameters</h1>
+    <h2 class="subtitle">Clear rules. Exact parameters. All on-chain.</h2>
+
+    <div class="cards">
+      <div class="card">
+        <h3>⏱️ Staking & Time windows</h3>
+        <div class="meta">
+          <span class="pill">Max post time (cap): 3h</span>
+          <span class="pill">Stake to pot: 6%</span>
+          <span class="pill">Post/Replace Immunity: 6m</span>
+          <span class="pill">Boost window: 3m</span>
+          <span class="pill">Boost gap: 3m</span>
+          <span class="pill">Glory: 6m</span>
+          <span class="pill">Settle freeze: 11s</span>
+        </div>
+        <p>The time duration for a message to be live on the billboard depends on the amount of MEOWT staked by its author at post or replacement. In any case, the maximum time is <strong>3 hours</strong>. At staking, <strong>6%</strong> of the total amount is immediately sent to the pot. The author <strong>always</strong> retrieves the remaining amount at resolution. After a new message appears, replacements are blocked for <strong>6 minutes</strong> (immunity). A boost locks replacements for <strong>3 minutes</strong> and enforces a <strong>3 minute</strong> cool-down before the next boost. When the main timer ends, a <strong>6 minute Glory</strong> period starts, when only likes are allowed. We add an <strong>11 second</strong> safety freeze after Glory and after a message is nuked or moderated to keep chain and UI animation perfectly in sync.</p>
+      </div>
+
+      <div class="card">
+        <h3>💸 Replacement Price</h3>
+        <div class="meta">
+          <span class="pill">Each MEOWT staked: 30 sec</span>
+          <span class="pill">Small premium: 5%</span>
+          <span class="pill">Price floor: 2% of stake</span>
+          <span class="pill">Min floor: 50 MEOWT</span>
+          <span class="pill">Engagement: 20% of pot</span>
+          <span class="pill">Cap engagement: 3x</span>
+        </div>
+        <p>The initial stake (for a post or a replacement) <strong>determines</strong> how long a message can stay live, up to a hard cap of <strong>3 hours</strong>. As time passes, the price to replace the post diminishes <strong>linearly</strong>. Staking above what’s needed for the 3-hour cap does <strong>not</strong> increase time; it only raises the floor for future replacement price, which is <strong>2%</strong> of the post’s initial stake (min <strong>50 MEOWT</strong>). Replacing the live post costs MEOWT based on the remaining lifetime plus a small <strong>5%</strong> premium and an additional component tied to <strong>20% of the pot</strong> (engagement), capped at <strong>3×</strong> the base price.</p>
+        <div class="summary">
+          <h4>Math quick ref</h4>
+          <div class="formula has-illustration">
+            <code>
+<strong>Seconds per token → k</strong>
+k = 30 sec / 1 MEOWT
+
+<strong>Total time from t₀ → B₀</strong>
+B₀ = min(stake · k, 3h)
+
+<strong>Floor</strong>
+floor = max(2% · stake, 50 MEOWT)
+
+<strong>Remaining time → rem</strong>
+rem = B₀ − (t − t₀)
+
+<strong>Base without premium → base</strong>
+base = ceil(rem / k)
+
+<strong>With premium ε = 5% → withEps</strong>
+withEps = base · (1 + ε)
+
+<strong>Effective base with floor → baseEff</strong>
+baseEff = max(withEps, floor)
+
+<strong>Engagement add → engAdj</strong>
+engAdj = min(20% · feePot, 3 · baseEff)
+
+<strong>Replacement price</strong>
+StakeToReplace = baseEff + engAdj
+            </code>
+            <!-- right-side illustration -->
+            <img alt="" class="mascot-math" data-mascot-math>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>👍👎 Voting & Like Tips</h3>
+        <div class="meta">
+          <span class="pill">Like fee: 1.5 MEOWT</span>
+          <span class="pill">Dislike fee: 2.0 MEOWT</span>
+          <span class="pill">Author tip: 0.5 MEOWT</span>
+          <span class="pill">Booster tip: 1.0 MEOWT</span>
+          <span class="pill">Glory author tip: 1.5 MEOWT</span>
+          <span class="pill">Min voting balance: 10 MEOWT</span>
+        </div>
+        <p>Anyone holding at least <strong>10 MEOWT</strong> can vote. A like costs <strong>1.5 MEOWT</strong>; a dislike costs <strong>2.0 MEOWT</strong>. Outside special windows, each like pays an immediate <strong>0.5 MEOWT</strong> tip to the author, with <strong>1.0 MEOWT</strong> added to the pot. During a <strong>Boost</strong>, each like pays an immediate <strong>1.0 MEOWT</strong> tip to the <em>booster</em>, with <strong>0.5 MEOWT</strong> added to the pot. During <strong>Glory</strong>, the entire like fee tips the <em>author</em>. The entire dislike fee always goes to the pot.</p>
+      </div>
+
+      <div class="card">
+        <h3>🏁 Resolution Splits</h3>
+        <div class="meta">
+          <span class="pill">Expired: 50%/40%/10%</span>
+          <span class="pill">Nuked: 0%/40%/60%</span>
+          <span class="pill">Replaced: 10%/40%/50%</span>
+          <span class="pill">House: 50%/50% Treasury/Burn</span>
+          <span class="pill">Carry over: 20% from house</span>
+          <span class="pill">Cap carry over: ≤ baseEff(new)</span>
+        </div>
+        <p>Posts resolve in <strong>three</strong> ways. <strong>Expired</strong> when time runs out: <strong>Author 50%</strong> • <strong>Winners 40%</strong> • <strong>House 10%</strong>. <strong>Replaced</strong> when a challenger stakes the replacement price outside immunity/boost/glory: <strong>Author 10%</strong> • <strong>Winners 40%</strong> • <strong>House 50%</strong>. <strong>Nuked</strong> when dislikes reach <strong>66%</strong> with quorum <strong>≥ 30 votes</strong>: <strong>Author 0%</strong> • <strong>Winners 40%</strong> • <strong>House 60%</strong>. After nukes, there is an <strong>11s</strong> freeze. On replace, <strong>20%</strong> of the old pot (from the house share) <em>carries over</em> to the new message, capped at ≤ <strong>baseEff(new)</strong>. House share is split 50/50 between burn and treasury.</p>
+        <div class="summary">
+          <h4>Distribution summary</h4>
+          <table>
+            <tr><th>Outcome</th><th>Author</th><th>Winners</th><th>House</th></tr>
+            <tr><td>Expired</td><td>50%</td><td>40%</td><td>10% (50/50 burn/treasury)</td></tr>
+            <tr><td>Replaced</td><td>10%</td><td>40%</td><td>50% (50/50 burn/treasury)</td></tr>
+            <tr><td>Nuked</td><td>0%</td><td>40%</td><td>60% (50/50 burn/treasury)</td></tr>
+          </table>
+          <div class="note-rose">Carryover on replace: 20% of old pot (from house), capped at ≤ baseEff(new).</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>🧹 Moderation</h3>
+        <div class="meta">
+          <span class="pill">Auto-nuke on flag</span>
+          <span class="pill">Freeze: 11s</span>
+          <span class="pill">Author 0%</span>
+          <span class="pill">Winners 40%</span>
+          <span class="pill">House 60% → burn</span>
+        </div>
+        <p>All messages are checked by an external oracle (e.g., Perspective). If flagged, the contract <strong>immediately nukes</strong> the post. Distribution follows the nuked split with a moderation override: <strong>Author 0%</strong>, <strong>Winners 40%</strong>, <strong>House 60%</strong> and the <strong>entire house share is sent to burn</strong> (no treasury). An <strong>11s</strong> freeze prevents posting until the board resets. The UI masks the post during this interval.</p>
+      </div>
+
+      <div class="card">
+        <h3>🚀 Boost Pricing</h3>
+        <div class="meta">
+          <span class="pill">min 6 MEOWT</span>
+          <span class="pill">max 60 MEOWT</span>
+          <span class="pill">target: 25% of pot</span>
+        </div>
+        <p>Boost cost tracks the pot for intuitive pricing: <strong>25%</strong> of pot, clamped to <strong>6–60 MEOWT</strong>. 100% of boost fees go to the pot. While a boost is active, like tips are split: <strong>1.0</strong> to booster, <strong>0.5</strong> to pot.</p>
+      </div>
+
+      <!-- 👇 Removed the “Guards & Governance” card per your request -->
+    </div>
+
+    <div class="footer">
+      <span class="foot-left"><img alt="$MEOWT" class="foot-logo" data-logo/> Exact on-chain values in the contract.</span>
+      <span>Parameters upgrade-gated until locked.</span>
+    </div>
+  </div>
+</section>
+
+<!-- PAGE 3 — PARAMETERS VALUES (unchanged structure, minor copy tweaks) -->
+<section id="params" class="page" data-mascot="mechanics.png" data-mascot-count="84">
+  <div class="page-inner">
+    <h1 class="title">📐 Mechanics: Parameters values</h1>
+    <h2 class="subtitle">Concrete numbers used at launch.</h2>
+
+    <div class="cards">
+      <div class="card">
+        <h3>⏱️ Timings</h3>
+        <ul>
+          <li><strong>maxB0</strong> = 3 hours</li>
+          <li><strong>POST_IMMUNITY_SECS</strong> = 360</li>
+          <li><strong>BOOST_WINDOW_SECS</strong> = 180</li>
+          <li><strong>BOOST_GAP_SECS</strong> = 180</li>
+          <li><strong>GLORY_SECS</strong> = 360</li>
+          <li><strong>SETTLE_FREEZE_SECS</strong> = 11</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>💸 Replace Price</h3>
+        <ul>
+          <li><strong>kSecPerToken</strong> = 30</li>
+          <li><strong>epsilonBps</strong> = 500 (5%)</li>
+          <li><strong>floorBps</strong> = 200 (2% of stake)</li>
+          <li><strong>minFloorMEOW</strong> = 50 MEOWT</li>
+          <li><strong>engagementBps</strong> = 2000 (20% of pot)</li>
+          <li><strong>capMultiplierBps</strong> = 30000 (3× baseEff cap)</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>👍👎 Voting</h3>
+        <ul>
+          <li><strong>voteFeeLike</strong> = 1.5 MEOWT</li>
+          <li><strong>voteFeeDislike</strong> = 2.0 MEOWT</li>
+          <li><strong>likeTipBase</strong> = 0.5 MEOWT (default author tip)</li>
+          <li><strong>minVotingBalance</strong> = 10 MEOWT</li>
+          <li><strong>vMin</strong> = 30 votes (quorum)</li>
+          <li><strong>nukeBps</strong> = 6600 (66%)</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>🏁 Splits & Carryover</h3>
+        <ul>
+          <li><strong>Expired</strong>: Author 50% • Winners 40% • House 10%</li>
+          <li><strong>Replaced</strong>: Author 10% • Winners 40% • House 50%</li>
+          <li><strong>Nuked</strong>: Author 0% • Winners 40% • House 60%</li>
+          <li><strong>carryoverBpsOnReplace</strong> = 2000 (20% of old pot)</li>
+          <li><strong>carryoverCapMultiplierBps</strong> = 10000 (≤ 1× baseEff(new))</li>
+          <li><strong>carryoverMinVotes</strong> = 0</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>🚀 Boosts & Pot Seed</h3>
+        <ul>
+          <li><strong>boostCost</strong> = clamp(6, 25% of pot, 60)</li>
+          <li><strong>Boost like tips</strong>: 1 to booster, 0.5 to pot (while active)</li>
+          <li><strong>Glory like tips</strong>: 100% to author</li>
+          <li><strong>Pot seed</strong> on post/replace: 6% of stake → pot</li>
+          <li><strong>House split</strong> at resolution: 50% burn / 50% treasury</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>🛡️ Guardrails</h3>
+        <ul>
+          <li><strong>minStakeToPost</strong> = 50 MEOWT</li>
+          <li><strong>Posting blocked</strong> during Glory + settle freezes post nuked and moderation</li>
+          <li><strong>Replace blocked</strong> while no message active, or during immunity, boost and glory</li>
+          <li><strong>Moderation</strong>: auto-nuke on flag → <strong>Author 0%</strong>, <strong>Winners 40%</strong>, <strong>House 60% to burn</strong></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span class="foot-left"><img alt="$MEOWT" class="foot-logo" data-logo/> Mirrors deployed contract defaults.</span>
+      <span>Subject to final audit before mainnet.</span>
+    </div>
+  </div>
+</section>
+
+<!-- PAGE 4 — TOKENOMICS (unchanged content) -->
+
+<!-- PAGE 4 — TOKENOMICS (updated) -->
+<section id="tokenomics" class="page" data-mascot="tokenomics.png" data-mascot-count="84">
+  <div class="page-inner">
+    <h1 class="title">📈 Tokenomics</h1>
+    <h2 class="subtitle">Straightforward, low-maintenance, and transparent.</h2>
+
+    <div class="cards">
+      <div class="card">
+        <h3>🧮 Total Supply</h3>
+        <div class="summary">
+          <table>
+            <tr><th>Token</th><th>Symbol</th><th>Total Supply</th><th>Chain</th></tr>
+            <tr><td>HearMeOwT</td><td>MEOWT</td><td>1,000,000,000</td><td>Base</td></tr>
+          </table>
+        </div>
+        <p>No further minting. Ownership and vesting addresses will be published at TGE.</p>
+      </div>
+
+      <div class="card">
+        <h3>🥧 Allocation</h3>
+        <div class="summary">
+          <table>
+            <tr><th>Bucket</th><th>%</th><th>Amount</th><th>Notes</th></tr>
+            <tr><td>Presale</td><td>20%</td><td>200,000,000</td><td>25% TGE, 75% linear 3m (monthly)</td></tr>
+            <tr><td>Team</td><td>12%</td><td>120,000,000</td><td>12m linear (monthly) via VestingWallet</td></tr>
+            <tr><td>Treasury / Ops</td><td>8%</td><td>80,000,000</td><td>12m linear (monthly)</td></tr>
+            <tr><td>Liquidity & MM</td><td>10%</td><td>100,000,000</td><td>Seed DEX; LP locked/burned</td></tr>
+            <tr><td>Ecosystem & Rewards</td><td>30%</td><td>300,000,000</td><td>Timelocked distributor (no micromanaged emissions)</td></tr>
+            <tr><td>Community Airdrop</td><td>10%</td><td>100,000,000</td><td>Claim window; unclaimed → burn/treasury</td></tr>
+            <tr><td>Strategic / Partners</td><td>10%</td><td>100,000,000</td><td>Allocated if needed; 12–18m linear</td></tr>
+          </table>
+        </div>
+        <p>Everything not circulating at TGE is locked in visible, on-chain vesting or timelocks.</p>
+      </div>
+
+      <div class="card">
+        <h3>🚀 Presale (simple, fixed-price)</h3>
+        <ul>
+          <li><strong>Allocation:</strong> 200M (20%).</li>
+          <li><strong>Vesting:</strong> 25% at TGE, rest linear over 3 months (monthly).</li>
+          <li><strong>Caps:</strong> per-wallet min/max; allowlist optional.</li>
+          <li><strong>Unsold:</strong> move to Ecosystem or burn.</li>
+        </ul>
+        <p>Why fixed price? It’s predictable, low-touch, and easy to verify. No complex auctions needed.</p>
+      </div>
+
+      <div class="card">
+        <h3>💧 Liquidity & Launch</h3>
+        <ul>
+          <li>Seed DEX with <strong>100M MEOWT</strong> + matching ETH.</li>
+          <li><strong>Lock / burn</strong> the LP tokens.</li>
+          <li>Publish the wallets for burn, treasury, and vesting contracts.</li>
+        </ul>
+        <p>Initial circulating at TGE = Presale (TGE portion) + Liquidity pool + Airdrop.</p>
+      </div>
+
+      <div class="card">
+        <h3>🧰 Ops & Moderation Budget</h3>
+        <p>Treasury covers infra, moderation API, keepers, audits, and basic maintenance. No promises of future features; the game is complete at launch.</p>
+      </div>
+
+      <div class="card">
+        <h3>📜 “No-Roadmap” Pledge</h3>
+        <p>This is a finished toy: <strong>the game you see is the game you get</strong>, as a fully functional on-chain billboard game. No vague promises, no endless teasers.</p>
+      </div>
+
+      <div class="card">
+        <h3>⚠️ Plain-English Notice</h3>
+        <p>MEOWT is a utility token for an on-chain game. It is <strong>not</strong> an investment contract or a promise of profit. Jurisdictional rules vary; users are responsible for complying with local laws. We recommend basic geofencing/KYC where required.</p>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span class="foot-left"><img alt="$MEOWT" class="foot-logo" data-logo/> Transparent allocations & on-chain vesting.</span>
+      <span>Keep it simple. Make it fun.</span>
+    </div>
+  </div>
+</section>
+
+
+<!-- PAGE 5 — ROADMAP (unchanged) -->
+<section id="roadmap" class="page" data-mascot="roadmap.png" data-mascot-count="84">
+  <div class="page-inner">
+    <h1 class="title">🗺️ Roadmap</h1>
+    <h2 class="subtitle">Ship small. Keep promises. Have fun 😺</h2>
+
+    <div class="cards">
+      <div class="card">
+        <h3>Phase 1 — Launch & Ops</h3>
+        <ul>
+          <li><strong>Final contract deployed</strong> with the rules in this doc (params visible on-chain, owner on a Safe).</li>
+          <li><strong>Moderation bot live</strong> (GitHub Actions + Perspective/OpenAI): auto-nuke on flag + 11s freeze; UI mask during freeze.</li>
+          <li><strong>Liquidity seeded</strong> on DEX; LP <strong>locked or burned</strong>. Publish all addresses (burn, treasury, vesting).</li>
+          <li><strong>Claims are self-serve</strong> in the UI (authors auto, voters claim / batch-claim available). No extra “settlement keeper” needed.</li>
+          <li><strong>Transparency over hype</strong>: public source, parameters documented; optional community review / audit budget permitting.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>Phase 2 — Social Surfaces</h3>
+        <ul>
+          <li>Share cards, leaderboards, and “glory highlights”.</li>
+          <li>Creator profiles & post history.</li>
+          <li>Community-run sticker/overlay packs.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>Phase 3 — Expansion </h3>
+        <ul>
+          <li>Permissionless “side billboards”.</li>
+          <li>Seasonal parameter presets (no hidden knobs; rotate the published set before <code>lockParams()</code> or stick with the base).</li>
+          <li>DAO-style controls: timelock + multisig for owner actions; eventual <strong>permanent</strong> <code>lockParams()</code>.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>Plain-English note</h3>
+        <p><strong>This is a finished game at launch.</strong> Extras are aspirational, not empty promises. The game <strong>already</strong> works exactly as described.</p>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span class="foot-left"><img alt="$MEOWT" class="foot-logo" data-logo/> Feedback welcome: tune parameters, not vibes.</span>
+      <span>The game you see is the game you get.</span>
+    </div>
+  </div>
+</section>
+
+
+<!-- Floating TOC -->
+<nav class="toc" aria-label="Quick navigation">
+  <div class="toc-inner">
+    <a href="#intro"     data-target="intro">✨ Intro</a>
+    <a href="#mechanics" data-target="mechanics">⚙️ Mechanics</a>
+    <a href="#params"    data-target="params">📐 Params</a>
+    <a href="#tokenomics"data-target="tokenomics">📈 Tokenomics</a>
+    <a href="#roadmap"   data-target="roadmap">🗺️ Roadmap</a>
+  </div>
+</nav>
+
+<script>
+  // === Asset base (folder next to this HTML) ===
+  const ASSET_BASE = "./images";
+
+  // Try multiple logo extensions automatically
+  const LOGO_BASENAME = "logo";
+  const LOGO_EXTS = [".svg", ".png", ".webp", ".jpg", ".jpeg"];
+
+  function setLogo(el){
+    let i = 0;
+    function tryNext(){
+      if (i >= LOGO_EXTS.length) { return; }
+      el.style.display = "";
+      el.src = `${ASSET_BASE}/${LOGO_BASENAME}${LOGO_EXTS[i++]}`;
+    }
+    el.onerror = tryNext;
+    el.onload  = () => { el.style.display = ""; };
+    tryNext();
+  }
+
+  document.querySelectorAll('[data-logo]').forEach(setLogo);
+
+  // --- math mascot loader (tries multiple extensions) ---
+  (function setMathImages(){
+    const exts = [".png",".webp",".jpg",".jpeg",".svg"];
+    document.querySelectorAll("[data-mascot-math]").forEach(img => {
+      let i = 0;
+      function tryNext(){
+        if (i >= exts.length) return;
+        img.src = `${ASSET_BASE}/math${exts[i++]}`;
+      }
+      img.onerror = tryNext;
+      tryNext();
+    });
+  })();
+
+  // === Inline logo after the word MEOWT ===
+  (function addInlineMeowtLogos(){
+    const SKIP = new Set(["SCRIPT","STYLE","CODE","PRE","TEXTAREA","NOSCRIPT"]);
+    const root = document.body;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node){
+        if (!node.nodeValue || node.nodeValue.indexOf('MEOWT') === -1) return NodeFilter.FILTER_REJECT;
+        const p = node.parentElement;
+        if (!p || SKIP.has(p.tagName) || p.closest('.no-inline-logo')) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    const targets = [];
+    while (walker.nextNode()) targets.push(walker.currentNode);
+
+    const re = /\bMEOWT\b/g;
+
+    for (const textNode of targets){
+      const { nodeValue } = textNode;
+      let match; let lastIndex = 0;
+      const frag = document.createDocumentFragment();
+      while ((match = re.exec(nodeValue))){
+        if (match.index > lastIndex) frag.appendChild(document.createTextNode(nodeValue.slice(lastIndex, match.index)));
+        frag.appendChild(document.createTextNode('MEOWT'));
+        const img = document.createElement('img');
+        img.alt = '$MEOWT';
+        img.className = 'logo-inline';
+        setLogo(img);
+        frag.appendChild(document.createTextNode(' '));
+        frag.appendChild(img);
+        lastIndex = match.index + match[0].length;
+      }
+      if (lastIndex < nodeValue.length) frag.appendChild(document.createTextNode(nodeValue.slice(lastIndex)));
+      textNode.parentNode.replaceChild(frag, textNode);
+    }
+  })();
+
+  // === Non-overlapping mascot scatter ===
+  (function scatterAll(){
+    const MAX_PER_PAGE = 72;
+    const PADDING = 24;
+    const MARGIN = 6;
+
+    const pages = document.querySelectorAll('.page');
+    pages.forEach(page => {
+      const file = page.getAttribute('data-mascot');
+      const countAttr = parseInt(page.getAttribute('data-mascot-count') || '0', 10);
+      if (!file || !countAttr) return;
+
+      const count = Math.min(countAttr, MAX_PER_PAGE);
+      const rect = page.getBoundingClientRect();
+      const W = rect.width, H = rect.height;
+
+      const placed = [];
+
+      function canPlace(x,y,r){
+        if (x < PADDING + r || x > W - PADDING - r) return false;
+        if (y < PADDING + r || y > H - PADDING - r) return false;
+        for (const p of placed){
+          const dx = x - p.x, dy = y - p.y;
+          const d2 = dx*dx + dy*dy;
+          const minD = (r + p.r + MARGIN);
+          if (d2 < (minD*minD)) return false;
+        }
+        return true;
+      }
+
+      for (let i=0; i<count; i++){
+        const size = 54 + Math.random() * 48;
+        const r = size * 0.5;
+
+        let tries = 0, placedOne = false;
+        while (tries++ < 200){
+          const x = PADDING + r + Math.random() * (W - 2*(PADDING + r));
+          const y = PADDING + r + Math.random() * (H - 2*(PADDING + r));
+          if (canPlace(x,y,r)){
+            const img = document.createElement('img');
+            img.src = `${ASSET_BASE}/${file}`;
+            img.alt = ""; img.decoding = "async"; img.loading = "lazy";
+            img.className = 'mascot';
+            img.style.left = x + 'px';
+            img.style.top  = y + 'px';
+            img.style.width = (2*r) + 'px';
+            img.style.setProperty('--r', (Math.random()*50 - 25).toFixed(1) + 'deg');
+            img.onerror = () => img.remove();
+            page.appendChild(img);
+            placed.push({x,y,r});
+            placedOne = true;
+            break;
+          }
+        }
+        if (!placedOne){ break; }
+      }
+    });
+
+    let t;
+    window.addEventListener('resize', () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        document.querySelectorAll('.mascot').forEach(m=>m.remove());
+        scatterAll();
+      }, 120);
+    }, { passive:true });
+  })();
+
+  // === Floating TOC behavior ===
+  (function toc(){
+    const ids   = ["intro","mechanics","params","tokenomics","roadmap"];
+    const links = Array.from(document.querySelectorAll('.toc a[data-target]'));
+    links.forEach(a => {
+      a.addEventListener('click', e => {
+        e.preventDefault();
+        const id  = a.getAttribute('data-target');
+        const sec = document.getElementById(id);
+        if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+    const io = new IntersectionObserver(entries => {
+      entries.forEach(ent => {
+        if (!ent.isIntersecting) return;
+        const id = ent.target.id;
+        links.forEach(l => l.classList.toggle('is-active', l.getAttribute('data-target') === id));
+        history.replaceState(null, '', '#'+id);
+      });
+    }, { threshold: 0.6 });
+    ids.forEach(id => {
+      const sec = document.getElementById(id);
+      if (sec) io.observe(sec);
+    });
+  })();
+</script>
+
+</body>
+</html>
