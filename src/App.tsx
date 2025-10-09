@@ -1135,6 +1135,9 @@ const idBig = hasId ? (id as bigint) : 0n;
   const remFallback = Math.max(0, Number(remChainBN ?? 0n));
   const remSec = (endTsNum > 0 || exposureEndRef.current > 0) ? exposureLeft : remFallback;
 
+  const resolvedFlag = Boolean((m as any)?.resolved ?? (m as any)?.[10]);
+  const nukedFlag = Boolean((m as any)?.nuked ?? (m as any)?.[11]);
+
   const inGlory   = (exposureLeft === 0) && (gloryEndRef.current > nowSec);
   const gloryLeft = inGlory ? (gloryEndRef.current - nowSec) : 0;
 
@@ -1152,6 +1155,24 @@ const idBig = hasId ? (id as bigint) : 0n;
   );
   const effectiveShow   = hasId && nowSec < (untilShow + SHOW_CUSHION);
   const loading         = Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive);
+
+  React.useEffect(() => {
+    if (!hasId) return;
+    if (!resolvedFlag && !nukedFlag) return;
+
+    const chainRem = Number(remChainBN ?? 0n);
+    const chainGlory = Number(gloryRemChainBN ?? 0n);
+    const latestWindowEnd = Math.max(exposureEndRef.current, gloryEndRef.current);
+    const now = nowSec;
+
+    if (chainRem > 0 || chainGlory > 0) return;
+    if (latestWindowEnd > now) return;
+
+    const cutoff = now - (SHOW_CUSHION + 1);
+    if (showUntilRef.current > cutoff) {
+      showUntilRef.current = cutoff;
+    }
+  }, [hasId, resolvedFlag, nukedFlag, remChainBN, gloryRemChainBN, nowSec]);
 
   // === Non-zero latch for boostCost (live > batched > 0) ===
   const boostCostRef = React.useRef<bigint>(0n);
