@@ -1,38 +1,29 @@
 // src/web3modal.ts
 import { createWeb3Modal } from '@web3modal/wagmi/react'
-import { wagmiConfig, TARGET_CHAIN } from './wagmi'
+import { wagmiConfig, TARGET_CHAIN, WC_PROJECT_ID } from './wagmi'
 
-// Make sure this runs exactly once (even with HMR or multiple imports)
 declare global {
-  interface Window {
-    __W3M_INITIALIZED__?: boolean
-  }
+  interface Window { _w3mReady?: boolean }
 }
 
-const projectId = import.meta.env.VITE_WC_PROJECT_ID as string | undefined
+// Initialize exactly once
+export function loadWeb3Modal() {
+  if (typeof window === 'undefined') return
+  if (window._w3mReady) return
 
-if (!projectId) {
-  // Fail loudly in dev, be visible in prod
-  console.error(
-    '[web3modal] Missing VITE_WC_PROJECT_ID. Set it in Cloudflare Pages (Production env) and redeploy.'
-  )
-}
-
-if (!window.__W3M_INITIALIZED__ && projectId) {
   createWeb3Modal({
     wagmiConfig,
-    projectId,
+    projectId: WC_PROJECT_ID,
     defaultChain: TARGET_CHAIN,
     enableAnalytics: false,
-    themeMode: 'dark',
-    // Keep modal above any app overlays/masks
-    themeVariables: { '--w3m-z-index': '2147483648' }
+    themeMode: 'dark'
+    // If you need to force the modal above overlays later:
+    // themeVariables: { '--w3m-z-index': 2147483647 as any }
   })
-  window.__W3M_INITIALIZED__ = true
 
-  // Tiny sanity ping so you can verify on the live site
-  // (Open DevTools → Console and look for this)
-  console.log('[web3modal] initialized', {
-    hasProjectId: !!projectId
-  })
+  window._w3mReady = true
+  if (import.meta.env.DEV) console.log('[web3modal] created')
 }
+
+// Eager init in the browser
+if (typeof window !== 'undefined') loadWeb3Modal()
