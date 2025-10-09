@@ -1,12 +1,11 @@
 // src/main.tsx
 
-import './index.css'
 import './web3modal'
+import './index.css'
 import './polyfills'
 
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-
 
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import App from './App'

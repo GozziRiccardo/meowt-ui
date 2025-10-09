@@ -4,7 +4,7 @@
 
 @layer base {
   /* Keep Web3Modal above any full-screen masks/overlays */
-  :root { --w3m-z-index: 2147483648; }
+  :root { --w3m-z-index: 2147483647; }
 
   html, body, #root { height: 100%; }
   body {
