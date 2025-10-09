@@ -20,7 +20,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { keccak256, toBytes, parseUnits } from "viem";
-import { useWeb3Modal } from "@web3modal/wagmi/react";
+import { useSafeWeb3Modal } from "./lib/useSafeWeb3Modal";
 import { watchAccount, watchChainId } from "wagmi/actions";
 
 // at the top of App.tsx
@@ -2437,7 +2437,7 @@ function AddMeowtButton() {
   return <AddMeowtButtonInner />;
 }
 function AddMeowtButtonInner() {
-  const { open } = useWeb3Modal();
+  const { open } = useSafeWeb3Modal();
   const { data: walletClient } = useWalletClient();
   const [busy, setBusy] = React.useState(false);
   const addToken = React.useCallback(async () => {
@@ -2478,7 +2478,7 @@ function AddMeowtButtonInner() {
   );
 }
 function ConnectControls() {
-  const { open } = useWeb3Modal();
+  const { open } = useSafeWeb3Modal();
   const { status, address } = useAccount();
   const { disconnect } = useDisconnect();
   const connected = status === "connected" && !!address;
