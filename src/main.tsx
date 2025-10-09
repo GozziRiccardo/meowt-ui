@@ -1,6 +1,7 @@
 // src/main.tsx
-import './polyfills'
+
 import './web3modal'   // <- creates the modal (wagmi flavor), once
+import './polyfills'
 
 import React from 'react'
 import { createRoot } from 'react-dom/client'
