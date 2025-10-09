@@ -1,29 +1,29 @@
 // src/web3modal.ts
 import { createWeb3Modal } from '@web3modal/wagmi/react'
-import { wagmiConfig, TARGET_CHAIN, WC_PROJECT_ID } from './wagmi'
+import { wagmiConfig, TARGET_CHAIN } from './wagmi'
+import { WC_PROJECT_ID, assertEnv } from './lib/env'
 
 declare global {
-  interface Window { _w3mReady?: boolean }
+  interface Window {
+    __w3mInit?: boolean
+  }
 }
 
-// Initialize exactly once
-export function loadWeb3Modal() {
+export function ensureWeb3ModalLoaded() {
   if (typeof window === 'undefined') return
-  if (window._w3mReady) return
+  if (window.__w3mInit) return
+  assertEnv()
+  if (!WC_PROJECT_ID) return
 
+  window.__w3mInit = true
   createWeb3Modal({
     wagmiConfig,
     projectId: WC_PROJECT_ID,
     defaultChain: TARGET_CHAIN,
-    enableAnalytics: false,
-    themeMode: 'dark'
-    // If you need to force the modal above overlays later:
-    // themeVariables: { '--w3m-z-index': 2147483647 as any }
+    themeMode: 'dark',
+    // NOTE: we intentionally removed themeVariables.zIndex to avoid TS number/string mismatch.
   })
-
-  window._w3mReady = true
-  if (import.meta.env.DEV) console.log('[web3modal] created')
+  console.log('[web3modal] created')
 }
 
-// Eager init in the browser
-if (typeof window !== 'undefined') loadWeb3Modal()
+ensureWeb3ModalLoaded()

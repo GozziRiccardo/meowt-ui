@@ -20,15 +20,13 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { keccak256, toBytes, parseUnits } from "viem";
-import {
-  createWeb3Modal,
-  useWeb3Modal,
-} from "@web3modal/wagmi/react";
+import { useWeb3Modal } from "@web3modal/wagmi/react";
 import { watchAccount, watchChainId } from "wagmi/actions";
 
 // at the top of App.tsx
 import { RewardsHeaderButton, RewardsDock } from "./rewardsAuto";
 import { NetworkQuietProvider, useQuiet, runQuietly } from "./quiet";
+import W3MDebug from "./components/W3MDebug";
 
 
 // --- error tidying + tiny write retry ---
@@ -65,25 +63,6 @@ async function withRetry<T>(fn: () => Promise<T>, tries = 2, delayMs = 350): Pro
 // Optional alias to catch any leftover calls using a capital W
 export const WithRetry = withRetry;
 
-
-// -------------------- One-time Web3Modal init (guard HMR) --------------------
-const WC_PROJECT_ID = (import.meta.env as any)
-  .VITE_WALLETCONNECT_PROJECT_ID as string;
-if (!WC_PROJECT_ID) throw new Error("VITE_WALLETCONNECT_PROJECT_ID is missing");
-
-declare global {
-  interface Window {
-    __MEOWT_W3M?: boolean;
-  }
-}
-if (typeof window !== "undefined" && !window.__MEOWT_W3M) {
-  createWeb3Modal({
-    wagmiConfig,
-    projectId: WC_PROJECT_ID,
-    enableAnalytics: true,
-  });
-  window.__MEOWT_W3M = true;
-}
 
 // -------------------- ENV --------------------
 
@@ -2483,11 +2462,28 @@ function ConnectControls() {
   const { disconnect } = useDisconnect();
   const connected = status === "connected" && !!address;
   const short = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
+  const handleConnect = React.useCallback(
+    async (event?: React.MouseEvent<HTMLButtonElement>) => {
+      event?.preventDefault();
+      try {
+        await open({ view: "Connect" } as any);
+      } catch (err) {
+        console.error("[connect] Web3Modal failed, trying direct injected connect", err);
+        const ethereum = (window as any)?.ethereum;
+        if (ethereum?.request) {
+          await ethereum.request({ method: "eth_requestAccounts" });
+        } else {
+          alert("No injected wallet found and Web3Modal failed to open.");
+        }
+      }
+    },
+    [open]
+  );
   return (
     <div className="flex items-center gap-2">
       {!connected ? (
         <button
-          onClick={() => open({ view: "Connect" } as any)}
+          onClick={handleConnect}
           className="px-3 py-1.5 rounded-md font-medium bg-rose-600 text-white hover:bg-rose-700 border border-transparent"
         >
           Connect Wallet
@@ -2694,6 +2690,7 @@ export default function App() {
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={qc}>
         <NetworkQuietProvider>
+          <W3MDebug />
           <AppInner />
         </NetworkQuietProvider>
       </QueryClientProvider>
