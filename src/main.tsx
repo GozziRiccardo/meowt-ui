@@ -1,8 +1,8 @@
 // src/main.tsx
 
+import './polyfills'
 import './web3modal'
 import './index.css'
-import './polyfills'
 
 import React from 'react'
 import { createRoot } from 'react-dom/client'
