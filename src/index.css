@@ -3,6 +3,9 @@
 @tailwind utilities;
 
 @layer base {
+  /* Keep Web3Modal above any full-screen masks/overlays */
+  :root { --w3m-z-index: 2147483648; }
+
   html, body, #root { height: 100%; }
   body {
     @apply text-zinc-900 font-sans;
@@ -40,7 +43,3 @@
   }
   .dangle { animation: dangle 1.8s ease-in-out infinite; transform-origin: top left; }
 }
-
-
-
-
