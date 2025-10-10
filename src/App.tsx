@@ -2538,15 +2538,11 @@ function ConnectControls() {
     async (event?: React.MouseEvent<HTMLButtonElement>) => {
       event?.preventDefault();
       try {
+        // Always show the universal wallet picker (desktop + mobile)
         await open({ view: "Connect" } as any);
       } catch (err) {
-        console.error("[connect] Web3Modal failed, trying direct injected connect", err);
-        const ethereum = (window as any)?.ethereum;
-        if (ethereum?.request) {
-          await ethereum.request({ method: "eth_requestAccounts" });
-        } else {
-          alert("No injected wallet found and Web3Modal failed to open.");
-        }
+        // No user-facing alert; console is enough. Users can retry.
+        console.warn("[connect] Unable to open Web3Modal", err);
       }
     },
     [open]
