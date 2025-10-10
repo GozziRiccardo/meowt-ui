@@ -116,7 +116,22 @@ const ERC20_ABI = [
 
 
 // -------------------- Query client --------------------
-const qc = new QueryClient();
+const qc = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // never carry old data into a fresh mount/key
+      placeholderData: undefined,
+      keepPreviousData: false,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: false,
+      staleTime: 0,
+      gcTime: 5 * 60 * 1000,
+      // avoid smart structural merge that can preserve old subfields
+      structuralSharing: false,
+      retry: 2,
+    } as any,
+  },
+});
 
 // -------------------- Small helpers --------------------
 
@@ -631,6 +646,7 @@ function headlineSize(n: number) {
 
 
 function MessagePreview({
+  msgId,
   uri,
   contentHash,
   author,
@@ -643,6 +659,7 @@ function MessagePreview({
   lockLeft = 0,
   lockKind = "none",
 }: {
+  msgId?: bigint;
   uri: string;
   contentHash: string;
   author: string;
@@ -662,17 +679,23 @@ function MessagePreview({
 
   const isZeroHash =
     !contentHash || contentHash === "0x" || contentHash === "0x".padEnd(66, "0");
-  const LS_KEY = isZeroHash ? `meowt:uri:${uri}` : `meowt:hash:${contentHash}`;
+
+  // Gate LS by message id so a previous message can’t leak into a fresh load.
+  const idPart = msgId && msgId !== 0n ? String(msgId) : "noid";
+  const LS_KEY = isZeroHash
+    ? `meowt:msg:${idPart}:uri:${uri || ''}`
+    : `meowt:msg:${idPart}:hash:${contentHash || '0x'}`;
 
   const initialFromLS = React.useMemo(() => {
     try {
-      return typeof window !== "undefined"
-        ? localStorage.getItem(LS_KEY) ?? undefined
-        : undefined;
+      if (typeof window === "undefined") return undefined;
+      if (!msgId || msgId === 0n) return undefined;
+      if (!uri && isZeroHash) return undefined;
+      return localStorage.getItem(LS_KEY) ?? undefined;
     } catch {
       return undefined;
     }
-  }, [LS_KEY]);
+  }, [LS_KEY, msgId, uri, isZeroHash]);
 
   const [text, setText] = React.useState<string | undefined>(initialFromLS);
   const cacheRef = React.useRef<Map<string, string>>(new Map());
@@ -904,42 +927,42 @@ function useGameSnapshot() {
   const { quiet } = useQuiet();
 
   // Active id
-  // --- Active id (stable via placeholderData) + zero-id boot grace ---
-const ZERO_ID_GRACE_MS = 700;
-const zeroIdGraceUntilRef = React.useRef<number>(0);
+  // --- Active id + zero-id boot grace ---
+  const ZERO_ID_GRACE_MS = 700;
+  const zeroIdGraceUntilRef = React.useRef<number>(0);
 
-const { data: id } = useReadContract({
-  address: GAME as `0x${string}`,
-  abi: GAME_ABI,
-  functionName: "activeMessageId",
-  query: {
-    staleTime: 0,
-    gcTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    placeholderData: (prev) => prev,
-  },
-});
+  const { data: id } = useReadContract({
+    address: GAME as `0x${string}`,
+    abi: GAME_ABI,
+    functionName: "activeMessageId",
+    query: {
+      staleTime: 0,
+      gcTime: 5 * 60 * 1000,
+      refetchOnWindowFocus: false,
+      keepPreviousData: false,
+    } as any,
+  });
 
-// initialize the grace window once on mount, and cancel it as soon as a non-zero id appears
-React.useEffect(() => {
-  if (!zeroIdGraceUntilRef.current) {
-    zeroIdGraceUntilRef.current = Date.now() + ZERO_ID_GRACE_MS;
-  }
-  if (id && id !== 0n) {
-    zeroIdGraceUntilRef.current = 0; // no need to keep the grace once we saw a real id
-  }
-}, [id]);
+  // initialize the grace window once on mount, and cancel it as soon as a non-zero id appears
+  React.useEffect(() => {
+    if (!zeroIdGraceUntilRef.current) {
+      zeroIdGraceUntilRef.current = Date.now() + ZERO_ID_GRACE_MS;
+    }
+    if (id && id !== 0n) {
+      zeroIdGraceUntilRef.current = 0; // no need to keep the grace once we saw a real id
+    }
+  }, [id]);
 
-const nowMs = Date.now();
-const zeroIdGraceActive =
-  (id === 0n) && zeroIdGraceUntilRef.current > 0 && nowMs < zeroIdGraceUntilRef.current;
+  const nowMs = Date.now();
+  const zeroIdGraceActive =
+    id === 0n && zeroIdGraceUntilRef.current > 0 && nowMs < zeroIdGraceUntilRef.current;
 
-// Treat 0 as "still loading" during the brief grace window
-const waitingForId =
-  typeof id === "undefined" || id === null || zeroIdGraceActive;
+  // Treat 0 as "still loading" during the brief grace window
+  const waitingForId =
+    typeof id === "undefined" || id === null || zeroIdGraceActive;
 
-const hasId = !!id && id !== 0n;
-const idBig = hasId ? (id as bigint) : 0n;
+  const hasId = !!id && id !== 0n;
+  const idBig = hasId ? (id as bigint) : 0n;
 
 
   // Batched reads (indexed)
@@ -963,8 +986,8 @@ const idBig = hasId ? (id as bigint) : 0n;
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
       refetchOnWindowFocus: false,
-      placeholderData: (prev) => prev,
-    },
+      keepPreviousData: false,
+    } as any,
   });
 
   // Separate live reads
@@ -978,8 +1001,8 @@ const idBig = hasId ? (id as bigint) : 0n;
       staleTime: 0,
       refetchOnWindowFocus: false,
       refetchInterval: 1000,
-      placeholderData: (p) => p,
-    },
+      keepPreviousData: false,
+    } as any,
   });
   const { data: gloryRemChainBN } = useReadContract({
     address: GAME as `0x${string}`,
@@ -990,8 +1013,8 @@ const idBig = hasId ? (id as bigint) : 0n;
       staleTime: 0,
       refetchOnWindowFocus: false,
       refetchInterval: 1000,
-      placeholderData: (p) => p,
-    },
+      keepPreviousData: false,
+    } as any,
   });
 
   // NEW: dedicated live read for boostCost + non-zero latch (kills flicker)
@@ -1002,9 +1025,9 @@ const idBig = hasId ? (id as bigint) : 0n;
     query: {
       staleTime: 0,
       refetchOnWindowFocus: false,
-      placeholderData: (prev) => prev,
+      keepPreviousData: false,
       enabled: !quiet,
-    },
+    } as any,
   });
 
   // Helper to extract multicall results
@@ -2317,6 +2340,7 @@ function ActiveCard() {
         <div className="mx-auto w-full">
           {previewReady ? (
             <MessagePreview
+              msgId={displayMsgId}
               uri={uri}
               contentHash={contentHash}
               author={authorForUi}
@@ -2607,8 +2631,8 @@ function BlockRefresher() {
     query: {
       staleTime: 0,
       refetchOnWindowFocus: false,
-      placeholderData: (prev) => prev,
-    },
+      keepPreviousData: false,
+    } as any,
   });
 
   const lastBlockRef = React.useRef<bigint | null>(null);
