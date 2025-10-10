@@ -917,17 +917,19 @@ function WaitingCard() {
 }
 
 // -------------------- Game snapshot (reads tuned for mainnet) --------------------
-
-// -------------------- Game snapshot (reads tuned for mainnet) --------------------
 function useGameSnapshot() {
-  const INIT_HOLD_MS = 400; // slightly shorter on mainnet
+  const INIT_HOLD_MS = 400;           // keep your values
   const ID_CHANGE_HOLD_MS = 700;
   const OPTIMISTIC_SHOW_MS = 1100;
   const SHOW_CUSHION = 1;
   const { quiet } = useQuiet();
 
-  // Active id
-  // --- Active id + zero-id boot grace ---
+  // -------- Boot anti-ghost settings --------
+  const BOOT_MODE_MS = 2500; // during first ~2.5s be extra strict
+  const APP_BOOT_TS = React.useRef(Date.now()).current;
+  const booting = Date.now() - APP_BOOT_TS < BOOT_MODE_MS;
+
+  // --- Active id (stable via placeholderData) + zero-id boot grace ---
   const ZERO_ID_GRACE_MS = 700;
   const zeroIdGraceUntilRef = React.useRef<number>(0);
 
@@ -939,33 +941,25 @@ function useGameSnapshot() {
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
       refetchOnWindowFocus: false,
-      keepPreviousData: false,
-    } as any,
+      placeholderData: (prev) => prev, // ok
+    },
   });
 
-  // initialize the grace window once on mount, and cancel it as soon as a non-zero id appears
   React.useEffect(() => {
     if (!zeroIdGraceUntilRef.current) {
       zeroIdGraceUntilRef.current = Date.now() + ZERO_ID_GRACE_MS;
     }
-    if (id && id !== 0n) {
-      zeroIdGraceUntilRef.current = 0; // no need to keep the grace once we saw a real id
-    }
+    if (id && id !== 0n) zeroIdGraceUntilRef.current = 0;
   }, [id]);
 
   const nowMs = Date.now();
-  const zeroIdGraceActive =
-    id === 0n && zeroIdGraceUntilRef.current > 0 && nowMs < zeroIdGraceUntilRef.current;
+  const zeroIdGraceActive = (id === 0n) && zeroIdGraceUntilRef.current > 0 && nowMs < zeroIdGraceUntilRef.current;
 
-  // Treat 0 as "still loading" during the brief grace window
-  const waitingForId =
-    typeof id === "undefined" || id === null || zeroIdGraceActive;
-
+  const waitingForId = typeof id === "undefined" || id === null || zeroIdGraceActive;
   const hasId = !!id && id !== 0n;
   const idBig = hasId ? (id as bigint) : 0n;
 
-
-  // Batched reads (indexed)
+  // -------- Batched reads --------
   const { data: raw } = useReadContracts({
     allowFailure: true,
     contracts: hasId
@@ -975,7 +969,7 @@ function useGameSnapshot() {
           { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "requiredStakeToReplace" }, // 2
           { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "voteFeeLike" }, // 3
           { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "voteFeeDislike" }, // 4
-          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostCost" }, // 5 (fallback; see live latch below)
+          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostCost" }, // 5
           { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostedRemaining" }, // 6
           { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostCooldownRemaining" }, // 7
           { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "isReplaceBlocked" }, // 8
@@ -986,60 +980,38 @@ function useGameSnapshot() {
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
       refetchOnWindowFocus: false,
-      keepPreviousData: false,
-    } as any,
+      placeholderData: (prev) => prev,
+    },
   });
 
-  // Separate live reads
+  // -------- Live reads --------
   const { data: remChainBN } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
     functionName: "remainingSeconds",
     args: [idBig],
-    query: {
-      enabled: hasId && !quiet,
-      staleTime: 0,
-      refetchOnWindowFocus: false,
-      refetchInterval: 1000,
-      keepPreviousData: false,
-    } as any,
+    query: { enabled: hasId && !quiet, staleTime: 0, refetchOnWindowFocus: false, refetchInterval: 1000, placeholderData: (p) => p },
   });
   const { data: gloryRemChainBN } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
     functionName: "gloryRemaining",
-    query: {
-      enabled: hasId && !quiet,
-      staleTime: 0,
-      refetchOnWindowFocus: false,
-      refetchInterval: 1000,
-      keepPreviousData: false,
-    } as any,
+    query: { enabled: hasId && !quiet, staleTime: 0, refetchOnWindowFocus: false, refetchInterval: 1000, placeholderData: (p) => p },
   });
 
-  // NEW: dedicated live read for boostCost + non-zero latch (kills flicker)
+  // Live boost cost latch
   const { data: boostCostLive } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
     functionName: "boostCost",
-    query: {
-      staleTime: 0,
-      refetchOnWindowFocus: false,
-      keepPreviousData: false,
-      enabled: !quiet,
-    } as any,
+    query: { staleTime: 0, refetchOnWindowFocus: false, placeholderData: (prev) => prev, enabled: !quiet },
   });
 
-  // Helper to extract multicall results
   const take = (arr: any[] | undefined, i: number) =>
-    arr?.[i] && typeof arr[i] === "object" && "result" in (arr[i] as any)
-      ? ((arr[i] as any).result)
-      : undefined;
+    arr?.[i] && typeof arr[i] === "object" && "result" in (arr[i] as any) ? ((arr[i] as any).result) : undefined;
 
-  // Pull fields from batched reads
   const m = hasId ? (take(raw as any[], 0) ?? null) : null;
   const endTsBN = hasId ? ((take(raw as any[], 1) ?? 0n) as bigint) : 0n;
-
   const feeLike = hasId ? (take(raw as any[], 3) as bigint | undefined) : undefined;
   const feeDislike = hasId ? (take(raw as any[], 4) as bigint | undefined) : undefined;
   const boostCostRead = hasId ? (take(raw as any[], 5) as bigint | undefined) : undefined;
@@ -1062,7 +1034,7 @@ function useGameSnapshot() {
     return () => clearInterval(iv);
   }, []);
 
-  // Refs and latches
+  // Refs and latches (mostly unchanged)
   const lastIdRef       = React.useRef<bigint>(0n);
   const exposureEndRef  = React.useRef<number>(0);
   const gloryEndRef     = React.useRef<number>(0);
@@ -1071,9 +1043,8 @@ function useGameSnapshot() {
   const immEndRef       = React.useRef<number>(0);
   const showUntilRef    = React.useRef<number>(0);
   const idHoldUntilRef  = React.useRef<number>(0);
-  const APP_BOOT_TS     = React.useRef(Date.now()).current;
 
-  // Boot & id-change holds
+  // Boot & id-change holds (no optimistic show on boot)
   const bootHold = (Date.now() - APP_BOOT_TS) < INIT_HOLD_MS;
   React.useEffect(() => {
     if (!hasId) return;
@@ -1084,10 +1055,16 @@ function useGameSnapshot() {
       boostEndRef.current    = 0;
       cooldownEndRef.current = 0;
       immEndRef.current      = 0;
-      showUntilRef.current   = Math.max(showUntilRef.current, Math.floor(Date.now() / 1000) + Math.ceil(OPTIMISTIC_SHOW_MS / 1000));
+
+      // IMPORTANT: do not create an optimistic show window while booting
+      if (!booting) {
+        showUntilRef.current = Math.max(showUntilRef.current, Math.floor(Date.now() / 1000) + Math.ceil(OPTIMISTIC_SHOW_MS / 1000));
+      }
+
       idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS;
     }
-  }, [hasId, idBig]);
+  }, [hasId, idBig, booting]);
+
   React.useEffect(() => {
     if (hasId) return;
     lastIdRef.current = 0n;
@@ -1098,6 +1075,7 @@ function useGameSnapshot() {
     immEndRef.current = 0;
     showUntilRef.current = 0;
   }, [hasId]);
+
   const idChangeHold = Date.now() < idHoldUntilRef.current;
 
   // End/exposure window
@@ -1142,7 +1120,7 @@ function useGameSnapshot() {
     }
   }, [startTime, winPostImm]);
 
-  // "Show" gate
+  // "Show" gate base window (kept)
   React.useEffect(() => {
     const until = Math.max(exposureEndRef.current, gloryEndRef.current);
     if (until > 0) showUntilRef.current = Math.max(showUntilRef.current, until);
@@ -1159,7 +1137,7 @@ function useGameSnapshot() {
   const remSec = (endTsNum > 0 || exposureEndRef.current > 0) ? exposureLeft : remFallback;
 
   const resolvedFlag = Boolean((m as any)?.resolved ?? (m as any)?.[10]);
-  const nukedFlag = Boolean((m as any)?.nuked ?? (m as any)?.[11]);
+  const nukedFlag    = Boolean((m as any)?.nuked ?? (m as any)?.[11]);
 
   const inGlory   = (exposureLeft === 0) && (gloryEndRef.current > nowSec);
   const gloryLeft = inGlory ? (gloryEndRef.current - nowSec) : 0;
@@ -1171,46 +1149,75 @@ function useGameSnapshot() {
   else if (exposureLeft > 0 && immLeft > 0) { lockKind = "immunity"; lockLeft = immLeft; }
 
   const replaceLocked   = Boolean(replaceBlocked) || lockLeft > 0;
-  // Honor the optimistic "show" window on id changes to avoid sticking on the wait screen
-  const untilShow = Math.max(
-    showUntilRef.current,
-    Math.max(exposureEndRef.current, gloryEndRef.current)
-  );
-  const effectiveShow   = hasId && nowSec < (untilShow + SHOW_CUSHION);
-  const loading         = Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive);
 
+  // --------- NEW: proof-of-life and definitely-over guards ----------
+  const publicClient = usePublicClient();
+
+  // finalized confirm for the *current* id
+  const [idConfirmOk, setIdConfirmOk] = React.useState<bigint | 0n>(0n);
+  React.useEffect(() => {
+    setIdConfirmOk(0n);
+    if (!hasId || !idBig || idBig === 0n || !publicClient) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const finalizedId = (await publicClient.readContract({
+          address: GAME as `0x${string}`,
+          abi: GAME_ABI,
+          functionName: "activeMessageId",
+          blockTag: "finalized",
+        })) as bigint;
+        if (!cancelled && finalizedId === idBig) setIdConfirmOk(idBig);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [hasId, idBig, publicClient]);
+
+  // live timers are also proof-of-life
+  const liveProof = (Number(remChainBN ?? 0n) > 0) || (Number(gloryRemChainBN ?? 0n) > 0);
+
+  // message tuple loaded?
+  const mLoaded = !!m && startTime > 0 && B0secs > 0;
+
+  // hard "definitely over" fence: start + B0 + glory + freeze <= now
+  const hardOverAt =
+    (startTime && B0secs ? (startTime + B0secs + (winGlory || 0) + (winFreeze || 0)) : 0);
+  const definitelyOver = !!mLoaded && hardOverAt > 0 && nowSec >= hardOverAt;
+
+  // Only consider confirmed on boot if:
+  //  - finalized agrees, OR
+  //  - live timer says >0, OR
+  //  - tuple is loaded AND it's not definitely over
+  const bootConfirmed =
+    (idConfirmOk === idBig) || liveProof || (mLoaded && !definitelyOver);
+
+  // Final "show" decision:
+  //  - never show while booting unless confirmed
+  //  - never show if tuple proves it's definitely over
+  const untilShow = Math.max(showUntilRef.current, Math.max(exposureEndRef.current, gloryEndRef.current));
+  const baseShow = hasId && nowSec < (untilShow + SHOW_CUSHION);
+  const effectiveShow =
+    baseShow &&
+    !definitelyOver &&
+    (!booting ? true : bootConfirmed) &&
+    !bootHold &&
+    !idChangeHold &&
+    !waitingForId &&
+    !stillFetchingActive;
+
+  // Clear optimistic show once things are resolved to avoid tail flashes
   React.useEffect(() => {
     if (!hasId) return;
     if (!resolvedFlag && !nukedFlag) return;
-
     const chainRem = Number(remChainBN ?? 0n);
     const chainGlory = Number(gloryRemChainBN ?? 0n);
     const latestWindowEnd = Math.max(exposureEndRef.current, gloryEndRef.current);
     const now = nowSec;
-
     if (chainRem > 0 || chainGlory > 0) return;
     if (latestWindowEnd > now) return;
-
     const cutoff = now - (SHOW_CUSHION + 1);
-    if (showUntilRef.current > cutoff) {
-      showUntilRef.current = cutoff;
-    }
+    if (showUntilRef.current > cutoff) showUntilRef.current = cutoff;
   }, [hasId, resolvedFlag, nukedFlag, remChainBN, gloryRemChainBN, nowSec]);
-
-  React.useEffect(() => {
-    if (!hasId) return;
-    if (loading) return;
-
-    const noExposure = remSec <= 0;
-    const noGlory = gloryLeft <= 0;
-    const noLocks = lockLeft <= 0;
-    if (!noExposure || !noGlory || !noLocks) return;
-
-    const cutoff = nowSec - (SHOW_CUSHION + 1);
-    if (showUntilRef.current > cutoff) {
-      showUntilRef.current = cutoff;
-    }
-  }, [hasId, loading, remSec, gloryLeft, lockLeft, nowSec]);
 
   // === Non-zero latch for boostCost (live > batched > 0) ===
   const boostCostRef = React.useRef<bigint>(0n);
@@ -1223,34 +1230,29 @@ function useGameSnapshot() {
     id: idBig,
     show: effectiveShow,
 
-    // message + clocks
     m,
-    rem: BigInt(remSec),
-    gloryRem: gloryLeft,
+    rem: BigInt((endTsNum > 0 || exposureEndRef.current > 0) ? Math.max(0, exposureEndRef.current - nowSec) : Math.max(0, Number(remChainBN ?? 0n))),
+    gloryRem: inGlory ? gloryLeft : 0,
 
-    // fees (from batch)
     feeLike,
     feeDislike,
 
-    // boosts
-    boostCost: boostCostRef.current, // <- latched, flicker-free
-    boostedRem: boostLeft,
-    boostCooldownRem: cooldownLeft,
+    boostCost: boostCostRef.current,
+    boostedRem: Math.max(0, boostEndRef.current - nowSec),
+    boostCooldownRem: Math.max(0, cooldownEndRef.current - nowSec),
 
-    // windows for UI (used by masks etc.)
     winPostImm,
     winGlory,
     winFreeze,
 
-    // locks
     replaceLocked,
     lockKind,
     lockLeft,
 
-    // status
-    loading,
+    loading: Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive),
   } as const;
 }
+
 
 
 const GameSnapshotContext = React.createContext<ReturnType<typeof useGameSnapshot> | null>(null);

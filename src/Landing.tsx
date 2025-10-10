@@ -233,7 +233,7 @@ export default function Landing() {
         {/* Footer */}
         <footer className="w-full py-6">
           <div className="max-w-4xl mx-auto px-4 text-center text-xs opacity-80">
-            Built on Base Sepolia · $MEOWT
+            Built on Base · $MEOWT
           </div>
         </footer>
       </div>
