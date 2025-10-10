@@ -1174,6 +1174,21 @@ const idBig = hasId ? (id as bigint) : 0n;
     }
   }, [hasId, resolvedFlag, nukedFlag, remChainBN, gloryRemChainBN, nowSec]);
 
+  React.useEffect(() => {
+    if (!hasId) return;
+    if (loading) return;
+
+    const noExposure = remSec <= 0;
+    const noGlory = gloryLeft <= 0;
+    const noLocks = lockLeft <= 0;
+    if (!noExposure || !noGlory || !noLocks) return;
+
+    const cutoff = nowSec - (SHOW_CUSHION + 1);
+    if (showUntilRef.current > cutoff) {
+      showUntilRef.current = cutoff;
+    }
+  }, [hasId, loading, remSec, gloryLeft, lockLeft, nowSec]);
+
   // === Non-zero latch for boostCost (live > batched > 0) ===
   const boostCostRef = React.useRef<bigint>(0n);
   React.useEffect(() => {
