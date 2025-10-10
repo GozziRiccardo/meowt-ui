@@ -9,10 +9,10 @@ import { fallback } from 'viem'
 const VITE = import.meta.env as any
 
 // WalletConnect (NO fallback – fail fast if missing)
-const _pid = VITE?.VITE_WC_PROJECT_ID?.trim()
+const _pid = VITE?.VITE_WALLETCONNECT_PROJECT_ID?.trim()
 if (!_pid) {
-  console.error('[ENV] Missing VITE_WC_PROJECT_ID')
-  throw new Error('VITE_WC_PROJECT_ID is required')
+  console.error('[ENV] Missing VITE_WALLETCONNECT_PROJECT_ID')
+  throw new Error('VITE_WALLETCONNECT_PROJECT_ID is required')
 }
 export const WC_PROJECT_ID = _pid
 
@@ -64,8 +64,7 @@ export const wagmiConfig = createConfig({
       metadata: {
         name: 'HearMeOwT',
         description: 'Post, vote, and earn $MEOWT.',
-        url:
-          typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.xyz',
+        url: typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.xyz',
         icons: [
           typeof window !== 'undefined'
             ? new URL('/brand/logo-meowt.png', window.location.origin).toString()
