@@ -7,9 +7,13 @@ import { fallback } from 'viem'; // NEW
 // --- Env helpers -------------------------------------------------------------
 const VITE = import.meta.env as any;
 
-// WalletConnect (env preferred, fallback OK)
-export const WC_PROJECT_ID =
-  VITE?.VITE_WALLETCONNECT_PROJECT_ID || '7188dae135975f14cfd0b636ad5d8679';
+// WalletConnect (NO fallback – fail fast if missing)
+const _pid = VITE?.VITE_WALLETCONNECT_PROJECT_ID?.trim();
+if (!_pid) {
+  console.error('[ENV] Missing VITE_WALLETCONNECT_PROJECT_ID');
+  throw new Error('VITE_WALLETCONNECT_PROJECT_ID is required');
+}
+export const WC_PROJECT_ID = _pid;
 
 // Target network: "base" | "baseSepolia"
 const TARGET_NAME = (VITE?.VITE_NETWORK || 'base') as 'base' | 'baseSepolia';
