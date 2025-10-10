@@ -917,17 +917,18 @@ function WaitingCard() {
 }
 
 // -------------------- Game snapshot (reads tuned for mainnet) --------------------
+
+
+// -------------------- Game snapshot (reads tuned for mainnet) --------------------
+
+
+// -------------------- Game snapshot (reads tuned for mainnet) --------------------
 function useGameSnapshot() {
   const INIT_HOLD_MS = 400;           // keep your values
   const ID_CHANGE_HOLD_MS = 700;
   const OPTIMISTIC_SHOW_MS = 1100;
   const SHOW_CUSHION = 1;
   const { quiet } = useQuiet();
-  const publicClient = usePublicClient();
-
-  const BOOT_CONFIRM_MS = 1800;
-  const confirmDeadlineRef = React.useRef<number>(0);
-  const [idConfirmOk, setIdConfirmOk] = React.useState<bigint | 0n>(0n);
 
   // -------- Boot anti-ghost settings --------
   const BOOT_MODE_MS = 2500; // during first ~2.5s be extra strict
@@ -946,7 +947,7 @@ function useGameSnapshot() {
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
       refetchOnWindowFocus: false,
-      placeholderData: (prev) => prev, // ok
+      placeholderData: (prev) => prev,
     },
   });
 
@@ -958,49 +959,14 @@ function useGameSnapshot() {
   }, [id]);
 
   const nowMs = Date.now();
-  const zeroIdGraceActive = (id === 0n) && zeroIdGraceUntilRef.current > 0 && nowMs < zeroIdGraceUntilRef.current;
+  const zeroIdGraceActive =
+    id === 0n && zeroIdGraceUntilRef.current > 0 && nowMs < zeroIdGraceUntilRef.current;
 
   const waitingForId = typeof id === "undefined" || id === null || zeroIdGraceActive;
   const hasId = !!id && id !== 0n;
   const idBig = hasId ? (id as bigint) : 0n;
 
-<<<<<<< HEAD
   // -------- Batched reads --------
-=======
-  React.useEffect(() => {
-    setIdConfirmOk(0n);
-    if (!hasId || !idBig || idBig === 0n || !publicClient) {
-      confirmDeadlineRef.current = 0;
-      return;
-    }
-    confirmDeadlineRef.current = Date.now() + BOOT_CONFIRM_MS;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const finalizedId = (await publicClient.readContract({
-          address: GAME as `0x${string}`,
-          abi: GAME_ABI,
-          functionName: "activeMessageId",
-          blockTag: "finalized",
-        })) as bigint;
-
-        if (!cancelled && finalizedId === idBig) {
-          setIdConfirmOk(idBig);
-        }
-      } catch {
-        // ignore; we'll fall back to live timers or deadline
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [hasId, idBig, publicClient]);
-
-
-  // Batched reads (indexed)
->>>>>>> 99c3d17c2361fb001b1bd2f0e8f061ea3f9b4d0a
   const { data: raw } = useReadContracts({
     allowFailure: true,
     contracts: hasId
@@ -1031,13 +997,25 @@ function useGameSnapshot() {
     abi: GAME_ABI,
     functionName: "remainingSeconds",
     args: [idBig],
-    query: { enabled: hasId && !quiet, staleTime: 0, refetchOnWindowFocus: false, refetchInterval: 1000, placeholderData: (p) => p },
+    query: {
+      enabled: hasId && !quiet,
+      staleTime: 0,
+      refetchOnWindowFocus: false,
+      refetchInterval: 1000,
+      placeholderData: (p) => p,
+    },
   });
   const { data: gloryRemChainBN } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
     functionName: "gloryRemaining",
-    query: { enabled: hasId && !quiet, staleTime: 0, refetchOnWindowFocus: false, refetchInterval: 1000, placeholderData: (p) => p },
+    query: {
+      enabled: hasId && !quiet,
+      staleTime: 0,
+      refetchOnWindowFocus: false,
+      refetchInterval: 1000,
+      placeholderData: (p) => p,
+    },
   });
 
   // Live boost cost latch
@@ -1049,7 +1027,9 @@ function useGameSnapshot() {
   });
 
   const take = (arr: any[] | undefined, i: number) =>
-    arr?.[i] && typeof arr[i] === "object" && "result" in (arr[i] as any) ? ((arr[i] as any).result) : undefined;
+    arr?.[i] && typeof arr[i] === "object" && "result" in (arr[i] as any)
+      ? (arr[i] as any).result
+      : undefined;
 
   const m = hasId ? (take(raw as any[], 0) ?? null) : null;
   const endTsBN = hasId ? ((take(raw as any[], 1) ?? 0n) as bigint) : 0n;
@@ -1062,11 +1042,11 @@ function useGameSnapshot() {
   const winsTuple = hasId ? (take(raw as any[], 9) as readonly [bigint, bigint, bigint] | undefined) : undefined;
 
   const winPostImm = Number(winsTuple?.[0] ?? 300n);
-  const winGlory   = Number(winsTuple?.[1] ?? 300n);
-  const winFreeze  = Number(winsTuple?.[2] ?? 11n);
+  const winGlory = Number(winsTuple?.[1] ?? 300n);
+  const winFreeze = Number(winsTuple?.[2] ?? 11n);
 
   const startTime = Number((m?.startTime ?? m?.[3] ?? 0n) as bigint);
-  const B0secs    = Number((m?.B0 ?? m?.[4] ?? 0n) as bigint);
+  const B0secs = Number((m?.B0 ?? m?.[4] ?? 0n) as bigint);
 
   // Local ticker
   const [nowSec, setNowSec] = React.useState(() => Math.floor(Date.now() / 1000));
@@ -1076,30 +1056,33 @@ function useGameSnapshot() {
   }, []);
 
   // Refs and latches (mostly unchanged)
-  const lastIdRef       = React.useRef<bigint>(0n);
-  const exposureEndRef  = React.useRef<number>(0);
-  const gloryEndRef     = React.useRef<number>(0);
-  const boostEndRef     = React.useRef<number>(0);
-  const cooldownEndRef  = React.useRef<number>(0);
-  const immEndRef       = React.useRef<number>(0);
-  const showUntilRef    = React.useRef<number>(0);
-  const idHoldUntilRef  = React.useRef<number>(0);
+  const lastIdRef = React.useRef<bigint>(0n);
+  const exposureEndRef = React.useRef<number>(0);
+  const gloryEndRef = React.useRef<number>(0);
+  const boostEndRef = React.useRef<number>(0);
+  const cooldownEndRef = React.useRef<number>(0);
+  const immEndRef = React.useRef<number>(0);
+  const showUntilRef = React.useRef<number>(0);
+  const idHoldUntilRef = React.useRef<number>(0);
 
   // Boot & id-change holds (no optimistic show on boot)
-  const bootHold = (Date.now() - APP_BOOT_TS) < INIT_HOLD_MS;
+  const bootHold = Date.now() - APP_BOOT_TS < INIT_HOLD_MS;
   React.useEffect(() => {
     if (!hasId) return;
     if (lastIdRef.current !== idBig) {
-      lastIdRef.current   = idBig;
+      lastIdRef.current = idBig;
       exposureEndRef.current = 0;
-      gloryEndRef.current    = 0;
-      boostEndRef.current    = 0;
+      gloryEndRef.current = 0;
+      boostEndRef.current = 0;
       cooldownEndRef.current = 0;
-      immEndRef.current      = 0;
+      immEndRef.current = 0;
 
       // IMPORTANT: do not create an optimistic show window while booting
       if (!booting) {
-        showUntilRef.current = Math.max(showUntilRef.current, Math.floor(Date.now() / 1000) + Math.ceil(OPTIMISTIC_SHOW_MS / 1000));
+        showUntilRef.current = Math.max(
+          showUntilRef.current,
+          Math.floor(Date.now() / 1000) + Math.ceil(OPTIMISTIC_SHOW_MS / 1000),
+        );
       }
 
       idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS;
@@ -1122,13 +1105,13 @@ function useGameSnapshot() {
   // End/exposure window
   const endTsNum = Number(endTsBN ?? 0n);
   React.useEffect(() => {
-    const e = endTsNum > 0 ? endTsNum : (startTime && B0secs ? (startTime + B0secs) : 0);
+    const e = endTsNum > 0 ? endTsNum : startTime && B0secs ? startTime + B0secs : 0;
     if (e > 0) exposureEndRef.current = e;
   }, [endTsNum, startTime, B0secs]);
 
   // Glory window (predict + chain)
   React.useEffect(() => {
-    const predicted = (startTime && B0secs && winGlory) ? (startTime + B0secs + winGlory) : 0;
+    const predicted = startTime && B0secs && winGlory ? startTime + B0secs + winGlory : 0;
     if (predicted > 0) gloryEndRef.current = Math.max(gloryEndRef.current, predicted);
   }, [startTime, B0secs, winGlory]);
   React.useEffect(() => {
@@ -1150,7 +1133,8 @@ function useGameSnapshot() {
   }, [boostedRemBN, nowSec]);
   React.useEffect(() => {
     const cooldownRem = Number(boostCooldownBN ?? 0n);
-    if (cooldownRem > 0) cooldownEndRef.current = Math.max(cooldownEndRef.current, nowSec + cooldownRem);
+    if (cooldownRem > 0)
+      cooldownEndRef.current = Math.max(cooldownEndRef.current, nowSec + cooldownRem);
   }, [boostCooldownBN, nowSec]);
 
   // Immunity window
@@ -1168,44 +1152,34 @@ function useGameSnapshot() {
   }, [endTsNum, startTime, B0secs, winGlory, gloryRemChainBN]);
 
   // Derived clocks
-  const stillFetchingActive = hasId && !raw;
   const exposureLeft = Math.max(0, exposureEndRef.current - nowSec);
-  const immLeft      = Math.max(0, immEndRef.current - nowSec);
-  const boostLeft    = Math.max(0, boostEndRef.current - nowSec);
+  const immLeft = Math.max(0, immEndRef.current - nowSec);
+  const boostLeft = Math.max(0, boostEndRef.current - nowSec);
   const cooldownLeft = Math.max(0, cooldownEndRef.current - nowSec);
 
   const remFallback = Math.max(0, Number(remChainBN ?? 0n));
-  const remSec = (endTsNum > 0 || exposureEndRef.current > 0) ? exposureLeft : remFallback;
+  const remSec = endTsNum > 0 || exposureEndRef.current > 0 ? exposureLeft : remFallback;
 
   const resolvedFlag = Boolean((m as any)?.resolved ?? (m as any)?.[10]);
-  const nukedFlag    = Boolean((m as any)?.nuked ?? (m as any)?.[11]);
+  const nukedFlag = Boolean((m as any)?.nuked ?? (m as any)?.[11]);
 
-  const inGlory   = (exposureLeft === 0) && (gloryEndRef.current > nowSec);
-  const gloryLeft = inGlory ? (gloryEndRef.current - nowSec) : 0;
-
-  const liveProof = (Number(remChainBN ?? 0n) > 0) || (Number(gloryRemChainBN ?? 0n) > 0);
-  const bootConfirmed =
-    (idConfirmOk === idBig) ||
-    liveProof ||
-    (confirmDeadlineRef.current > 0 && Date.now() >= confirmDeadlineRef.current);
+  const inGlory = exposureLeft === 0 && gloryEndRef.current > nowSec;
+  const gloryLeft = inGlory ? gloryEndRef.current - nowSec : 0;
 
   let lockKind: "boost" | "glory" | "immunity" | "none" = "none";
   let lockLeft = 0;
-  if (inGlory && gloryLeft > 0) { lockKind = "glory"; lockLeft = gloryLeft; }
-  else if (boostLeft > 0)       { lockKind = "boost"; lockLeft = boostLeft; }
-  else if (exposureLeft > 0 && immLeft > 0) { lockKind = "immunity"; lockLeft = immLeft; }
+  if (inGlory && gloryLeft > 0) {
+    lockKind = "glory";
+    lockLeft = gloryLeft;
+  } else if (boostLeft > 0) {
+    lockKind = "boost";
+    lockLeft = boostLeft;
+  } else if (exposureLeft > 0 && immLeft > 0) {
+    lockKind = "immunity";
+    lockLeft = immLeft;
+  }
 
-  const replaceLocked   = Boolean(replaceBlocked) || lockLeft > 0;
-<<<<<<< HEAD
-=======
-  // Honor the optimistic "show" window on id changes to avoid sticking on the wait screen
-  const untilShow = Math.max(
-    showUntilRef.current,
-    Math.max(exposureEndRef.current, gloryEndRef.current)
-  );
-  const effectiveShow   = hasId && bootConfirmed && nowSec < (untilShow + SHOW_CUSHION);
-  const loading         = Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive);
->>>>>>> 99c3d17c2361fb001b1bd2f0e8f061ea3f9b4d0a
+  const replaceLocked = Boolean(replaceBlocked) || lockLeft > 0;
 
   // --------- NEW: proof-of-life and definitely-over guards ----------
   const publicClient = usePublicClient();
@@ -1225,34 +1199,40 @@ function useGameSnapshot() {
           blockTag: "finalized",
         })) as bigint;
         if (!cancelled && finalizedId === idBig) setIdConfirmOk(idBig);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [hasId, idBig, publicClient]);
 
   // live timers are also proof-of-life
-  const liveProof = (Number(remChainBN ?? 0n) > 0) || (Number(gloryRemChainBN ?? 0n) > 0);
+  const liveProof = Number(remChainBN ?? 0n) > 0 || Number(gloryRemChainBN ?? 0n) > 0;
 
   // message tuple loaded?
   const mLoaded = !!m && startTime > 0 && B0secs > 0;
 
   // hard "definitely over" fence: start + B0 + glory + freeze <= now
   const hardOverAt =
-    (startTime && B0secs ? (startTime + B0secs + (winGlory || 0) + (winFreeze || 0)) : 0);
+    startTime && B0secs ? startTime + B0secs + (winGlory || 0) + (winFreeze || 0) : 0;
   const definitelyOver = !!mLoaded && hardOverAt > 0 && nowSec >= hardOverAt;
 
   // Only consider confirmed on boot if:
   //  - finalized agrees, OR
   //  - live timer says >0, OR
   //  - tuple is loaded AND it's not definitely over
-  const bootConfirmed =
-    (idConfirmOk === idBig) || liveProof || (mLoaded && !definitelyOver);
+  const bootConfirmed = idConfirmOk === idBig || liveProof || (mLoaded && !definitelyOver);
 
   // Final "show" decision:
   //  - never show while booting unless confirmed
   //  - never show if tuple proves it's definitely over
-  const untilShow = Math.max(showUntilRef.current, Math.max(exposureEndRef.current, gloryEndRef.current));
-  const baseShow = hasId && nowSec < (untilShow + SHOW_CUSHION);
+  const untilShow = Math.max(
+    showUntilRef.current,
+    Math.max(exposureEndRef.current, gloryEndRef.current),
+  );
+  const baseShow = hasId && nowSec < untilShow + SHOW_CUSHION;
   const effectiveShow =
     baseShow &&
     !definitelyOver &&
@@ -1260,7 +1240,7 @@ function useGameSnapshot() {
     !bootHold &&
     !idChangeHold &&
     !waitingForId &&
-    !stillFetchingActive;
+    !(hasId && !raw); // stillFetchingActive
 
   // Clear optimistic show once things are resolved to avoid tail flashes
   React.useEffect(() => {
@@ -1287,28 +1267,37 @@ function useGameSnapshot() {
     id: idBig,
     show: effectiveShow,
 
+    // message + clocks
     m,
-    rem: BigInt((endTsNum > 0 || exposureEndRef.current > 0) ? Math.max(0, exposureEndRef.current - nowSec) : Math.max(0, Number(remChainBN ?? 0n))),
+    rem: BigInt(remSec),
     gloryRem: inGlory ? gloryLeft : 0,
 
+    // fees (from batch)
     feeLike,
     feeDislike,
 
+    // boosts
     boostCost: boostCostRef.current,
     boostedRem: Math.max(0, boostEndRef.current - nowSec),
-    boostCooldownRem: Math.max(0, cooldownEndRef.current - nowSec),
+    boostCooldownRem: cooldownLeft,
 
+    // windows for UI (used by masks etc.)
     winPostImm,
     winGlory,
     winFreeze,
 
+    // locks
     replaceLocked,
     lockKind,
     lockLeft,
 
-    loading: Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive),
+    // status
+    loading:
+      Boolean(bootHold || idChangeHold || waitingForId || (hasId && !raw)),
   } as const;
 }
+
+
 
 
 
