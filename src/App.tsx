@@ -925,6 +925,11 @@ function useGameSnapshot() {
   const OPTIMISTIC_SHOW_MS = 1100;
   const SHOW_CUSHION = 1;
   const { quiet } = useQuiet();
+  const publicClient = usePublicClient();
+
+  const BOOT_CONFIRM_MS = 1800;
+  const confirmDeadlineRef = React.useRef<number>(0);
+  const [idConfirmOk, setIdConfirmOk] = React.useState<bigint | 0n>(0n);
 
   // Active id
   // --- Active id + zero-id boot grace ---
@@ -963,6 +968,37 @@ function useGameSnapshot() {
 
   const hasId = !!id && id !== 0n;
   const idBig = hasId ? (id as bigint) : 0n;
+
+  React.useEffect(() => {
+    setIdConfirmOk(0n);
+    if (!hasId || !idBig || idBig === 0n || !publicClient) {
+      confirmDeadlineRef.current = 0;
+      return;
+    }
+    confirmDeadlineRef.current = Date.now() + BOOT_CONFIRM_MS;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const finalizedId = (await publicClient.readContract({
+          address: GAME as `0x${string}`,
+          abi: GAME_ABI,
+          functionName: "activeMessageId",
+          blockTag: "finalized",
+        })) as bigint;
+
+        if (!cancelled && finalizedId === idBig) {
+          setIdConfirmOk(idBig);
+        }
+      } catch {
+        // ignore; we'll fall back to live timers or deadline
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasId, idBig, publicClient]);
 
 
   // Batched reads (indexed)
@@ -1164,6 +1200,12 @@ function useGameSnapshot() {
   const inGlory   = (exposureLeft === 0) && (gloryEndRef.current > nowSec);
   const gloryLeft = inGlory ? (gloryEndRef.current - nowSec) : 0;
 
+  const liveProof = (Number(remChainBN ?? 0n) > 0) || (Number(gloryRemChainBN ?? 0n) > 0);
+  const bootConfirmed =
+    (idConfirmOk === idBig) ||
+    liveProof ||
+    (confirmDeadlineRef.current > 0 && Date.now() >= confirmDeadlineRef.current);
+
   let lockKind: "boost" | "glory" | "immunity" | "none" = "none";
   let lockLeft = 0;
   if (inGlory && gloryLeft > 0) { lockKind = "glory"; lockLeft = gloryLeft; }
@@ -1176,7 +1218,7 @@ function useGameSnapshot() {
     showUntilRef.current,
     Math.max(exposureEndRef.current, gloryEndRef.current)
   );
-  const effectiveShow   = hasId && nowSec < (untilShow + SHOW_CUSHION);
+  const effectiveShow   = hasId && bootConfirmed && nowSec < (untilShow + SHOW_CUSHION);
   const loading         = Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive);
 
   React.useEffect(() => {
