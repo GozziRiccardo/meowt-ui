@@ -1,5 +1,4 @@
 // src/wagmi.ts
-import { createWeb3Modal } from '@web3modal/wagmi/react'
 import { createConfig, http } from 'wagmi'
 import { base, baseSepolia } from 'wagmi/chains'
 import { injected, walletConnect, coinbaseWallet } from 'wagmi/connectors'
@@ -63,12 +62,12 @@ export const wagmiConfig = createConfig({
       showQrModal: false, // Web3Modal will render the modal
       metadata: {
         name: 'HearMeOwT',
-        description: 'Post, vote, and earn $MEOWT.',
+        description: 'MEOWT dApp',
         url: typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.app',
         icons: [
           typeof window !== 'undefined'
             ? new URL('/brand/logo-meowt.png', window.location.origin).toString()
-            : 'https://hearmeowt.app/brand/logo-meowt.png',
+            : '',
         ],
       },
     }),
@@ -82,20 +81,3 @@ export const wagmiConfig = createConfig({
   multiInjectedProviderDiscovery: true,
   // pollingInterval: 1500, // optional if you want faster block polling
 })
-
-// Guard Web3Modal init to avoid accidental early/SSR crashes
-if (typeof window !== 'undefined') {
-  try {
-    createWeb3Modal({
-      wagmiConfig,
-      projectId: WC_PROJECT_ID,
-      defaultChain: TARGET_CHAIN,
-      enableAnalytics: false,
-      themeVariables: {
-        '--w3m-accent': '#f43f5e',
-      },
-    })
-  } catch (e) {
-    console.warn('[w3m] init failed', e)
-  }
-}

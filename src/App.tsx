@@ -663,6 +663,7 @@ function MessagePreview({
   const isZeroHash =
     !contentHash || contentHash === "0x" || contentHash === "0x".padEnd(66, "0");
 
+  // Gate LS by message id so a previous message can’t leak into a fresh load.
   const idPart = msgId && msgId !== 0n ? String(msgId) : "noid";
   const LS_KEY = isZeroHash
     ? `meowt:msg:${idPart}:uri:${uri || ''}`
@@ -768,6 +769,9 @@ function MessagePreview({
   const bottomPad = (isBoost || isGlory) ? "pb-[clamp(24px,4vw,40px)]" : "";
   const ringColor = isGlory ? "!ring-amber-500" : (locked ? "!ring-red-600" : "");
   const topImg = isGlory ? GLORY_IMG : BOOST_IMG;
+  const caption = isGlory
+    ? "This meowssage has been crowned! Posting unlocks in "
+    : (isBoost ? "Boost firing! Replacement unlocks in " : "Replacement unlocks in ");
 
   const likeEnabled = canVote;
   const dislikeEnabled = canVote && !isGlory;
@@ -791,16 +795,24 @@ function MessagePreview({
         </div>
       )}
 
+      {left > 0 && (
+        <div className={`absolute top-2 right-2 z-20 px-2 py-0.5 rounded-md text-xs font-semibold ${
+          isGlory ? "bg-amber-500 text-black" : "bg-red-600 text-white"
+        } shadow flex items-center gap-1.5`}>
+          <span>⏳</span><span>{fmtClock(left)}</span>
+        </div>
+      )}
+
       <div className={topPad}>
         <div className="text-xs font-semibold tracking-wide uppercase mb-2 text-rose-600 dark:text-rose-300">
           {shortAddr}’s meowssage to the world
         </div>
 
         <div className={[
-          headlineSize(display.length),
-          "leading-relaxed whitespace-pre-wrap break-words break-all text-center mx-auto pb-3",
-          "max-h-[48vh] md:max-h-[56vh] overflow-auto",
-        ].join(" ")}>{display || " "}</div>
+  headlineSize(display.length),
+  "leading-relaxed whitespace-pre-wrap break-words break-all text-center mx-auto pb-3",
+  "max-h-[48vh] md:max-h-[56vh] overflow-auto",
+].join(" ")}>{display || " "}</div>
 
         {(isBoost || isGlory) && (
           <div className={["flex justify-center pointer-events-none select-none", bottomPad].join(" ")}>
@@ -810,6 +822,14 @@ function MessagePreview({
               className="h-[clamp(36px,9vw,88px)] w-auto drop-shadow-[0_0_10px_rgba(234,179,8,0.55)]"
               draggable={false}
             />
+          </div>
+        )}
+
+        {left > 0 && (
+          <div className={`mt-1 mb-2 text-sm font-semibold ${
+            isGlory ? "text-amber-700 dark:text-amber-300" : "text-red-700 dark:text-red-300"
+          }`}>
+            {caption}{fmtClock(left)}
           </div>
         )}
 
@@ -859,7 +879,6 @@ function MessagePreview({
     </div>
   );
 }
-
 
 // -------------------- Idle card --------------------
 function WaitingCard() {
@@ -2538,19 +2557,14 @@ function ConnectControls() {
     async (event?: React.MouseEvent<HTMLButtonElement>) => {
       event?.preventDefault();
       try {
-        // Always show the universal wallet picker (desktop + mobile)
         await open({ view: "Connect" } as any);
       } catch (err) {
-        console.warn("[connect] Unable to open Web3Modal, trying injected", err);
-        const ethereum =
-          typeof window !== "undefined" ? (window as any)?.ethereum : undefined;
+        console.error("[connect] Web3Modal failed, trying direct injected connect", err);
+        const ethereum = (window as any)?.ethereum;
         if (ethereum?.request) {
-          try {
-            await ethereum.request({ method: "eth_requestAccounts" });
-            return;
-          } catch (e) {
-            console.warn("[connect] Injected fallback failed", e);
-          }
+          await ethereum.request({ method: "eth_requestAccounts" });
+        } else {
+          alert("No injected wallet found and Web3Modal failed to open.");
         }
       }
     },
@@ -2601,38 +2615,28 @@ function ConnectBar() {
 }
 
 
-function TopTimerBanner() {
+function TimerBar() {
   const snap = useSnap();
+  const rem = Number((snap as any)?.rem ?? 0n);
   const show = Boolean((snap as any)?.show);
-  const left = Math.max(0, Number((snap as any)?.lockLeft ?? 0));
-  const kind = (snap as any)?.lockKind as "boost" | "glory" | "immunity" | "none";
-  const isGlory = kind === "glory";
-
-  if (!show || left <= 0) return null;
-
+  if (!show || rem <= 0) return null;
   return (
     <div className="mx-auto max-w-3xl px-3">
-      <div className="w-full flex flex-col items-center gap-1 select-none">
+      <div className="mt-2 mb-1 flex flex-col items-center gap-2">
         <img
           src="/illustrations/time-mascot.png"
-          alt="Time mascot"
-          className="h-[clamp(32px,6vw,60px)] w-auto pointer-events-none"
+          alt=""
+          className="h-10 md:h-12 object-contain select-none pointer-events-none"
           draggable={false}
         />
-        <div
-          className={[
-            "px-3 py-1 rounded-md shadow font-extrabold tabular-nums",
-            "text-lg md:text-2xl leading-none",
-            isGlory ? "bg-amber-500 text-black" : "bg-red-600 text-white",
-          ].join(" ")}
-        >
-          ⏳ {fmtClock(left)}
+        <div className="px-3 py-1.5 rounded-full text-2xl md:text-3xl font-extrabold bg-red-600 text-white shadow flex items-center gap-2">
+          <span>⏳</span>
+          <span>{fmtClock(rem)}</span>
         </div>
       </div>
     </div>
   );
 }
-
 
 // -------------------- Toast --------------------
 function Toast({ text }: { text: string }) {
@@ -2757,7 +2761,7 @@ function AppInner() {
       <main className="max-w-3xl mx-auto px-3 pb-14">
         <GameSnapshotProvider>
           <PrefetchRequired />
-          <TopTimerBanner />
+          <TimerBar />
 
           <section className="relative z-20 mt-4 flex flex-col gap-6 items-stretch">
             <ActiveCard />

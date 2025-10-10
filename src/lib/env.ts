@@ -1,4 +1,4 @@
-export const WC_PROJECT_ID = (import.meta as any)?.env?.VITE_WALLETCONNECT_PROJECT_ID as string | undefined
+export const WC_PROJECT_ID = (import.meta as any)?.env?.VITE_WC_PROJECT_ID as string | undefined
 
 export function assertEnv() {
   if (!WC_PROJECT_ID || typeof WC_PROJECT_ID !== 'string' || WC_PROJECT_ID.trim().length < 8) {
@@ -7,7 +7,7 @@ export function assertEnv() {
     }
   } else if (typeof window !== 'undefined') {
     const masked = `${WC_PROJECT_ID.slice(0, 4)}…${WC_PROJECT_ID.slice(-4)}`
-    console.log('[ENV] VITE_WALLETCONNECT_PROJECT_ID present:', masked)
+    console.log('[ENV] VITE_WC_PROJECT_ID present:', masked)
     ;(window as any).__W3M_PROJECT_ID = masked
   }
 }
