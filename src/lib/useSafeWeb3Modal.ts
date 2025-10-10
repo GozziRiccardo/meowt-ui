@@ -4,7 +4,7 @@ import { useWeb3Modal as useWeb3ModalBase } from '@web3modal/wagmi/react'
 let warnedMissing = false
 
 const missingMessage =
-  'Wallet connect modal is unavailable. Please ensure VITE_WC_PROJECT_ID is configured or try again later.'
+  'Wallet connect modal is unavailable. Please ensure VITE_WALLETCONNECT_PROJECT_ID is configured or try again later.'
 
 export function useSafeWeb3Modal(): ReturnType<typeof useWeb3ModalBase> {
   const fallback = React.useMemo(() => {
