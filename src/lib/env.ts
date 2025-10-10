@@ -1,4 +1,4 @@
-export const WC_PROJECT_ID = (import.meta as any)?.env?.VITE_WC_PROJECT_ID as string | undefined
+export const WC_PROJECT_ID = (import.meta as any)?.env?.VITE_WALLETCONNECT_PROJECT_ID as string | undefined
 
 export function assertEnv() {
   if (!WC_PROJECT_ID || typeof WC_PROJECT_ID !== 'string' || WC_PROJECT_ID.trim().length < 8) {
