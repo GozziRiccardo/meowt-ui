@@ -102,10 +102,248 @@ export function RewardsDock() {
   if (!enabled || !connected) return null;
 
   return (
-    <div className="w-full flex justify-center mt-2">
+    <div className="w-full flex justify-center mt-2 md:mt-3">
       <div className="max-w-3xl w-full px-3">
-        <ClaimAllButton auto />
+        <RewardsMenu />
       </div>
+    </div>
+  );
+}
+
+
+/* ======================= Static Rewards Menu ======================= */
+type RewardRow = { id: bigint; amount: bigint; voted: 1 | 2 };
+
+function fmtMEOW(x?: bigint) {
+  return typeof x === "bigint" ? Number(x) / 1e18 : 0;
+}
+function two(n?: number) {
+  return typeof n === "number" && Number.isFinite(n) ? n.toFixed(2) : "—";
+}
+
+async function findClaimablesSnapshot(
+  publicClient: any,
+  who: Address,
+  depth = 300,
+  concurrency = 8
+): Promise<bigint[]> {
+  async function getLastId(pc: any): Promise<bigint> {
+    const next = (await pc.readContract({
+      address: GAME as Address,
+      abi: GAME_ABI,
+      functionName: "nextMessageId",
+    })) as bigint;
+    return next > 0n ? next - 1n : 0n;
+  }
+  async function sim(pc: any, id: bigint): Promise<boolean> {
+    try {
+      await pc.simulateContract({
+        address: GAME as Address,
+        abi: GAME_ABI,
+        functionName: "claim",
+        args: [id],
+        account: who,
+        blockTag: "pending",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const last = await getLastId(publicClient);
+  if (last <= 0n) return [];
+  const start = last;
+  const end = last > BigInt(depth) ? last - BigInt(depth) + 1n : 1n;
+  const ids: bigint[] = [];
+  for (let id = start; id >= end; id--) ids.push(id);
+  const out: bigint[] = [];
+  let i = 0;
+  const workers = new Array(Math.min(concurrency, ids.length)).fill(0).map(
+    async () => {
+      while (i < ids.length) {
+        const idx = i++;
+        const id = ids[idx];
+        if (await sim(publicClient, id)) out.push(id);
+      }
+    }
+  );
+  await Promise.all(workers);
+  out.sort((a, b) => (a > b ? -1 : 1));
+  return out;
+}
+
+async function enrichRows(
+  publicClient: any,
+  who: Address,
+  ids: bigint[]
+): Promise<RewardRow[]> {
+  const rows: RewardRow[] = [];
+  for (const id of ids) {
+    try {
+      const [m, voteSide] = await Promise.all([
+        publicClient.readContract({
+          address: GAME as Address,
+          abi: GAME_ABI,
+          functionName: "messages",
+          args: [id],
+          blockTag: "pending",
+        }) as Promise<any>,
+        publicClient.readContract({
+          address: GAME as Address,
+          abi: GAME_ABI,
+          functionName: "voteOf",
+          args: [id, who],
+          blockTag: "pending",
+        }) as Promise<bigint>,
+      ]);
+      const share: bigint = (m?.sharePerVote ?? m?.[13] ?? 0n) as bigint;
+      if (share <= 0n) continue;
+      const voted = Number(voteSide ?? 0n) === 2 ? 2 : 1;
+      rows.push({ id, amount: share, voted: voted as 1 | 2 });
+    } catch {
+      /* ignore */
+    }
+  }
+  return rows;
+}
+
+function RewardsMenu() {
+  const { status, address } = useAccount();
+  const isConnected = status === "connected" && !!address;
+  const publicClient = usePublicClient();
+  const { writeContractAsync } = useWriteContract();
+
+  const [items, setItems] = React.useState<RewardRow[]>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [busyAll, setBusyAll] = React.useState(false);
+  const [toast, setToast] = React.useState("");
+
+  async function scanOnce() {
+    if (!publicClient || !isConnected) return;
+    setLoading(true);
+    try {
+      const ids = await findClaimablesSnapshot(
+        publicClient,
+        address as Address,
+        300,
+        8
+      );
+      const rows = await enrichRows(publicClient, address as Address, ids);
+      setItems(rows);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  React.useEffect(() => {
+    scanOnce();
+  }, []);
+
+  async function claimOne(id: bigint) {
+    if (!publicClient || !address) return;
+    try {
+      try {
+        await publicClient.simulateContract({
+          address: GAME as Address,
+          abi: GAME_ABI,
+          functionName: "claim",
+          args: [id],
+          account: address as Address,
+          blockTag: "pending",
+        });
+      } catch {
+        setToast("Already claimed or not claimable.");
+        setTimeout(() => setToast(""), 1400);
+        return;
+      }
+      const hash = await writeContractAsync({
+        address: GAME as Address,
+        abi: GAME_ABI,
+        functionName: "claim",
+        args: [id],
+      });
+      const r = await publicClient.waitForTransactionReceipt({ hash });
+      if (r.status === "success") {
+        setItems((prev) => prev.filter((x) => x.id !== id));
+      } else {
+        setToast("Claim failed on chain.");
+        setTimeout(() => setToast(""), 1400);
+      }
+    } catch (e: any) {
+      setToast(String(e?.shortMessage || e?.message || "Claim failed."));
+      setTimeout(() => setToast(""), 1600);
+    }
+  }
+
+  async function claimAll() {
+    if (!publicClient || items.length === 0) return;
+    setBusyAll(true);
+    try {
+      for (const it of [...items]) {
+        try {
+          await claimOne(it.id);
+        } catch {}
+      }
+    } finally {
+      setBusyAll(false);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl p-3 md:p-4 bg-emerald-50/80 dark:bg-emerald-900/20 ring-1 ring-emerald-300/50 dark:ring-emerald-700/40 shadow-sm backdrop-blur">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="text-sm font-semibold">Pending rewards</div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={scanOnce}
+            className="px-2 py-1 rounded-md text-xs font-semibold border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/10"
+            disabled={loading || busyAll}
+          >
+            Refresh
+          </button>
+          <button
+            onClick={claimAll}
+            className="px-3 py-1.5 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+            disabled={busyAll || items.length === 0}
+          >
+            {busyAll ? "Claiming…" : "Claim all"}
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-xs opacity-70">Scanning…</div>
+      ) : items.length === 0 ? (
+        <div className="text-sm">No rewards found.</div>
+      ) : (
+        <ul className="divide-y divide-black/10 dark:divide-white/10">
+          {items.map((it) => (
+            <li
+              key={String(it.id)}
+              className="py-2 flex items-center justify-between gap-3"
+            >
+              <div className="flex items-center gap-3">
+                <div className="text-base font-bold">
+                  {two(fmtMEOW(it.amount))} MEOWT
+                </div>
+                <div className="text-xs opacity-80">
+                  You voted {it.voted === 1 ? "😺" : "😾"}
+                </div>
+              </div>
+              <div>
+                <button
+                  onClick={() => claimOne(it.id)}
+                  className="px-3 py-1.5 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700"
+                >
+                  Claim
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {toast ? <div className="mt-2 text-xs">{toast}</div> : null}
     </div>
   );
 }
