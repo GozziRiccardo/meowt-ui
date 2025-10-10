@@ -34,6 +34,7 @@ import { watchAccount, watchChainId } from "wagmi/actions";
 // at the top of App.tsx
 import { RewardsHeaderButton, RewardsDock } from "./rewardsAuto";
 import { NetworkQuietProvider, useQuiet, runQuietly } from "./quiet";
+import InstallBanner from "./components/InstallBanner";
 import W3MDebug from "./components/W3MDebug";
 
 
@@ -2744,6 +2745,7 @@ function AppInner() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(1200px_600px_at_50%_0%,rgba(244,63,94,0.12),transparent_70%)] bg-gradient-to-b from-rose-50 to-white dark:from-neutral-950 dark:to-neutral-900 text-neutral-900 dark:text-neutral-100">
+      <InstallBanner />
       <WalletEventRefetch />
       <BlockRefresher />
 
@@ -2772,6 +2774,7 @@ function AppInner() {
       <main className="max-w-3xl mx-auto px-3 pb-14">
         <GameSnapshotProvider>
           <PrefetchRequired />
+          {/* InstallBanner is fixed; no layout shift here */}
           <TimerBar />
 
           <section className="relative z-20 mt-4 flex flex-col gap-6 items-stretch">
