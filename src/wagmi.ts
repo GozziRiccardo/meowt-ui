@@ -64,11 +64,11 @@ export const wagmiConfig = createConfig({
       metadata: {
         name: 'HearMeOwT',
         description: 'Post, vote, and earn $MEOWT.',
-        url: typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.xyz',
+        url: typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.app',
         icons: [
           typeof window !== 'undefined'
             ? new URL('/brand/logo-meowt.png', window.location.origin).toString()
-            : 'https://hearmeowt.xyz/brand/logo-meowt.png',
+            : 'https://hearmeowt.app/brand/logo-meowt.png',
         ],
       },
     }),
@@ -83,12 +83,19 @@ export const wagmiConfig = createConfig({
   // pollingInterval: 1500, // optional if you want faster block polling
 })
 
-createWeb3Modal({
-  wagmiConfig,
-  projectId: WC_PROJECT_ID,
-  defaultChain: TARGET_CHAIN,
-  enableAnalytics: false,
-  themeVariables: {
-    '--w3m-accent': '#f43f5e',
-  },
-})
+// Guard Web3Modal init to avoid accidental early/SSR crashes
+if (typeof window !== 'undefined') {
+  try {
+    createWeb3Modal({
+      wagmiConfig,
+      projectId: WC_PROJECT_ID,
+      defaultChain: TARGET_CHAIN,
+      enableAnalytics: false,
+      themeVariables: {
+        '--w3m-accent': '#f43f5e',
+      },
+    })
+  } catch (e) {
+    console.warn('[w3m] init failed', e)
+  }
+}
