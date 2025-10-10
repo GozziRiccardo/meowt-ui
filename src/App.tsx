@@ -129,7 +129,7 @@ const qc = new QueryClient({
       // avoid smart structural merge that can preserve old subfields
       structuralSharing: false,
       retry: 2,
-    },
+    } as any,
   },
 });
 
@@ -940,7 +940,7 @@ function useGameSnapshot() {
       gcTime: 5 * 60 * 1000,
       refetchOnWindowFocus: false,
       keepPreviousData: false,
-    },
+    } as any,
   });
 
   // initialize the grace window once on mount, and cancel it as soon as a non-zero id appears
@@ -987,7 +987,7 @@ function useGameSnapshot() {
       gcTime: 5 * 60 * 1000,
       refetchOnWindowFocus: false,
       keepPreviousData: false,
-    },
+    } as any,
   });
 
   // Separate live reads
@@ -1002,7 +1002,7 @@ function useGameSnapshot() {
       refetchOnWindowFocus: false,
       refetchInterval: 1000,
       keepPreviousData: false,
-    },
+    } as any,
   });
   const { data: gloryRemChainBN } = useReadContract({
     address: GAME as `0x${string}`,
@@ -1014,7 +1014,7 @@ function useGameSnapshot() {
       refetchOnWindowFocus: false,
       refetchInterval: 1000,
       keepPreviousData: false,
-    },
+    } as any,
   });
 
   // NEW: dedicated live read for boostCost + non-zero latch (kills flicker)
@@ -1027,7 +1027,7 @@ function useGameSnapshot() {
       refetchOnWindowFocus: false,
       keepPreviousData: false,
       enabled: !quiet,
-    },
+    } as any,
   });
 
   // Helper to extract multicall results
@@ -2632,7 +2632,7 @@ function BlockRefresher() {
       staleTime: 0,
       refetchOnWindowFocus: false,
       keepPreviousData: false,
-    },
+    } as any,
   });
 
   const lastBlockRef = React.useRef<bigint | null>(null);
