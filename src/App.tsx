@@ -2541,8 +2541,17 @@ function ConnectControls() {
         // Always show the universal wallet picker (desktop + mobile)
         await open({ view: "Connect" } as any);
       } catch (err) {
-        // No user-facing alert; console is enough. Users can retry.
-        console.warn("[connect] Unable to open Web3Modal", err);
+        console.warn("[connect] Unable to open Web3Modal, trying injected", err);
+        const ethereum =
+          typeof window !== "undefined" ? (window as any)?.ethereum : undefined;
+        if (ethereum?.request) {
+          try {
+            await ethereum.request({ method: "eth_requestAccounts" });
+            return;
+          } catch (e) {
+            console.warn("[connect] Injected fallback failed", e);
+          }
+        }
       }
     },
     [open]
