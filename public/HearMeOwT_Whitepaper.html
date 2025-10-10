@@ -108,38 +108,63 @@
   /* formula with right-side illustration */
   .formula.has-illustration{
     display: grid;
-    grid-template-columns: 1fr minmax(120px, 200px);
-    gap: 14px;
-    align-items: start;
+    grid-template-columns: minmax(0, 1fr) minmax(140px, 220px);
+    gap: clamp(12px, 2vw, 22px);
+    align-items: center;
   }
   .formula .mascot-math{
     width: 100%;
-    max-width: 200px;
+    max-width: 220px;
     height: auto;
     border-radius: 12px;
     display: block;
+    justify-self: center;
+    align-self: center;
   }
   @media (max-width: 720px){
     .formula.has-illustration{ display: block; }
     .formula .mascot-math{
       max-width: 180px;
-      margin: 8px auto 0;
+      margin: 12px auto 0;
     }
   }
 
-  :root{
-  --math-w: 240px;   /* image size */
-  --math-gap: 5px;  /* spacing between code and image */
-  --math-shift: -100px;/* negative pulls image toward text */
-}
-.formula.has-illustration{
-  grid-template-columns: 1fr var(--math-w);
-  gap: var(--math-gap);
-}
-.formula .mascot-math{
-  max-width: var(--math-w);
-  transform: translateX(var(--math-shift));
-}
+  .summary{
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  @media (max-width: 640px){
+    .summary{
+      padding: 12px 10px;
+    }
+    .summary table{
+      width: 100%;
+      table-layout: fixed;
+      font-size: 12px;
+    }
+    .summary th,
+    .summary td{
+      padding: 6px;
+      word-break: break-word;
+    }
+    .summary table th:nth-child(1),
+    .summary table th:nth-child(2),
+    .summary table th:nth-child(3),
+    .summary table th:nth-child(4){
+      width: auto;
+    }
+  }
+
+  @media (max-width: 480px){
+    .summary table{
+      font-size: 11px;
+    }
+    .summary th,
+    .summary td{
+      padding: 5px 4px;
+    }
+  }
 
 
 
@@ -180,6 +205,26 @@
   .toc a.is-active{ background: var(--accent); color:#fff; border-color: transparent; }
   @media (max-width: 540px){
     .toc-inner{ padding:6px 8px; gap:6px; } .toc a{ padding:6px 8px; font-weight:700; }
+  }
+
+  @media (max-width: 640px){
+    .toc{
+      left: 50%;
+      right: auto;
+      transform: translateX(-50%);
+      bottom: 16px;
+      width: min(92vw, 480px);
+    }
+    .toc-inner{
+      flex-wrap: wrap;
+      justify-content: center;
+      width: 100%;
+      gap: 6px;
+    }
+    .toc a{
+      flex: 1 1 calc(50% - 12px);
+      text-align: center;
+    }
   }
 
   @media print{
