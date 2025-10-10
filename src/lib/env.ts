@@ -7,7 +7,7 @@ export function assertEnv() {
     }
   } else if (typeof window !== 'undefined') {
     const masked = `${WC_PROJECT_ID.slice(0, 4)}…${WC_PROJECT_ID.slice(-4)}`
-    console.log('[ENV] VITE_WC_PROJECT_ID present:', masked)
+    console.log('[ENV] VITE_WALLETCONNECT_PROJECT_ID present:', masked)
     ;(window as any).__W3M_PROJECT_ID = masked
   }
 }
