@@ -198,6 +198,53 @@ async function estimateFees(publicClient: any) {
 
 type HardenedWriteFn = "post" | "replaceMessage" | "vote" | "boost" | "approve";
 
+// -- Chain helpers ------------------------------------------------------------
+const TARGET_CHAIN_HEX = `0x${TARGET_CHAIN.id.toString(16)}`;
+
+async function ensureOnTargetChain(): Promise<void> {
+  // Try best-effort EIP-1193 switch for injected wallets (MetaMask, Rabby, etc.)
+  const eth = (window as any)?.ethereum;
+  if (!eth?.request) return; // WalletConnect / CBW handled by connector
+  try {
+    const current = await eth.request({ method: "eth_chainId" });
+    if (typeof current === "string" && current.toLowerCase() === TARGET_CHAIN_HEX.toLowerCase()) {
+      return;
+    }
+  } catch {
+    // ignore and attempt a switch anyway
+  }
+  try {
+    await eth.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: TARGET_CHAIN_HEX }],
+    });
+  } catch (e: any) {
+    // If the chain is unrecognized, many wallets already have Base; if not, surface a clear error.
+    const msg = String(e?.message || "");
+    const code = (e && (e as any).code) || 0;
+    if (code === 4902 || /unrecognized|not added/i.test(msg)) {
+      throw new Error(`Please add & switch to ${TARGET_CHAIN.name} in your wallet, then retry.`);
+    }
+    throw new Error(`Wrong network. Switch to ${TARGET_CHAIN.name} and retry.`);
+  }
+}
+
+// Robustly extract a hex tx hash from various wallet return shapes
+function extractHash(maybe: any): `0x${string}` | undefined {
+  try {
+    if (!maybe) return undefined;
+    if (typeof maybe === "string" && maybe.startsWith("0x")) return maybe as `0x${string}`;
+    if (typeof maybe === "object") {
+      const h =
+        (maybe as any)?.hash ||
+        (maybe as any)?.transactionHash ||
+        (maybe as any)?.txnHash;
+      if (typeof h === "string" && h.startsWith("0x")) return h as `0x${string}`;
+    }
+  } catch {}
+  return undefined;
+}
+
 const GAS_FALLBACK: Record<HardenedWriteFn, bigint> = {
   post: 400_000n,
   replaceMessage: 420_000n,
@@ -239,8 +286,8 @@ async function simThenWrite(opts: {
   functionName: HardenedWriteFn;
   args: readonly any[];
   chainId: number;
-}) {
-  const { publicClient, writeContractAsync, account, address, abi, functionName, args, chainId } = opts;
+}): Promise<`0x${string}`> {
+  const { publicClient, writeContractAsync, account, address, abi, functionName, args } = opts;
 
   const baseCall = {
     account,
@@ -298,7 +345,6 @@ async function simThenWrite(opts: {
 
     const submission: any = request ? { ...request } : { ...baseWrite };
     submission.account = account;
-    if (chainId) submission.chainId = chainId;
     submission.gas = gas;
     if (typeof fees.maxFeePerGas === "bigint") submission.maxFeePerGas = fees.maxFeePerGas;
     if (typeof fees.maxPriorityFeePerGas === "bigint") submission.maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
@@ -307,7 +353,13 @@ async function simThenWrite(opts: {
     }
 
     try {
-      return await writeContractAsync(submission);
+      const res = await writeContractAsync(submission);
+      const txHash = extractHash(res);
+      if (!txHash) {
+        // Some wallets resolve before returning a hash — normalize to a clear error
+        throw new Error("Wallet did not return a transaction hash");
+      }
+      return txHash;
     } catch (err) {
       lastError = err;
       if (!isTransient(err)) throw err;
@@ -360,6 +412,9 @@ async function ensureAllowanceThenSettle(
   writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"],
   kick?: () => void,               // <- pass from the caller
 ): Promise<boolean> {
+  // Ensure wallet is on the right chain before any approval
+  await ensureOnTargetChain();
+
   if (!publicClient || !owner || amount === 0n) return false;
 
   let current: bigint = 0n;
@@ -388,7 +443,7 @@ async function ensureAllowanceThenSettle(
 
   // wait for the approval receipt
   if (h && publicClient?.waitForTransactionReceipt) {
-    const r = await publicClient.waitForTransactionReceipt({ hash: h as `0x${string}` });
+    const r = await publicClient.waitForTransactionReceipt({ hash: h });
     if (r.status !== "success") throw new Error("Transaction reverted");
   }
 
@@ -1416,7 +1471,14 @@ function PostBoxInner() {
   async function onPost() {
     if (posting) return;
     setPosting(true);
+    let preflightError: string | null = null;
     try {
+      // Preflight network switch
+      await ensureOnTargetChain().catch((e: any) => {
+        preflightError = String(e?.message || e);
+        throw e;
+      });
+
       suppressMasksFor(12, [MOD_MASK_KEY, NUKE_MASK_KEY]);
       if (!publicClient || !address) throw new Error("Wallet not connected");
       const dec = Number(decimals ?? 18);
@@ -1453,7 +1515,7 @@ function PostBoxInner() {
           chainId: TARGET_CHAIN.id,
         });
 
-        await confirmThenRefresh(txHash as `0x${string}`);
+        await confirmThenRefresh(txHash);
 
         // Proactively pull the new id, kick queries, and clear any latent glory mask
         try {
@@ -1470,7 +1532,7 @@ function PostBoxInner() {
       setText("");
       setToast("Post confirmed ✨");
     } catch (e: any) {
-      setToast(tidyError(e));
+      setToast(preflightError || tidyError(e));
     } finally {
       extendMaskSuppression(6);
       setPosting(false);
@@ -1578,7 +1640,14 @@ function ReplaceBoxInner() {
   async function onReplace() {
     if (replacing) return;
     setReplacing(true);
+    let preflightError: string | null = null;
     try {
+      // Preflight network switch
+      await ensureOnTargetChain().catch((e: any) => {
+        preflightError = String(e?.message || e);
+        throw e;
+      });
+
       suppressMasksFor(12, [MOD_MASK_KEY, NUKE_MASK_KEY]);
       if (!publicClient || !address) throw new Error("Wallet not connected");
 
@@ -1618,7 +1687,7 @@ function ReplaceBoxInner() {
           chainId: TARGET_CHAIN.id,
         });
 
-        await confirmThenRefresh(h as `0x${string}`);
+        await confirmThenRefresh(h);
 
         // Proactively pull the new id, kick queries, and clear any latent glory mask
         try {
@@ -1634,7 +1703,7 @@ function ReplaceBoxInner() {
       });
       setToast("Replacement confirmed ✨");
     } catch (e: any) {
-      setToast(tidyError(e));
+      setToast(preflightError || tidyError(e));
     } finally {
       extendMaskSuppression(6);
       setReplacing(false);
@@ -2199,8 +2268,14 @@ function ActiveCard() {
 
   // ====== Hardened VOTE actions ======
   async function onLike() {
+    let preflightError: string | null = null;
     try {
       if (!canVote || !publicClient || !address) return;
+      // Preflight network switch
+      await ensureOnTargetChain().catch((e: any) => {
+        preflightError = String(e?.message || e);
+        throw e;
+      });
 
       // fee (live, with fallback)
       let fee = (snap as any)?.feeLike as bigint | undefined;
@@ -2238,20 +2313,26 @@ function ActiveCard() {
         });
 
         setHasVotedLocal(true);
-        await confirmThenRefresh(h as `0x${string}`);
+        await confirmThenRefresh(h);
       });
       setToast("Like confirmed ✨");
     } catch (e: any) {
       setHasVotedLocal(false);
-      setToast(tidyError(e));
+      setToast(preflightError || tidyError(e));
     } finally {
       setTimeout(() => setToast(""), 1400);
     }
   }
 
   async function onDislike() {
+    let preflightError: string | null = null;
     try {
       if (!canVote || !publicClient || !address) return;
+      // Preflight network switch
+      await ensureOnTargetChain().catch((e: any) => {
+        preflightError = String(e?.message || e);
+        throw e;
+      });
 
       let fee = (snap as any)?.feeDislike as bigint | undefined;
       if (!fee || fee === 0n) {
@@ -2288,12 +2369,12 @@ function ActiveCard() {
         });
 
         setHasVotedLocal(true);
-        await confirmThenRefresh(h as `0x${string}`);
+        await confirmThenRefresh(h);
       });
       setToast("Dislike confirmed ✨");
     } catch (e: any) {
       setHasVotedLocal(false);
-      setToast(tidyError(e));
+      setToast(preflightError || tidyError(e));
     } finally {
       setTimeout(() => setToast(""), 1400);
     }
@@ -2307,7 +2388,13 @@ function ActiveCard() {
 
   async function onBoost() {
     if (boostBusy) return;
+    let preflightError: string | null = null;
     try {
+      // Preflight network switch
+      await ensureOnTargetChain().catch((e: any) => {
+        preflightError = String(e?.message || e);
+        throw e;
+      });
       if (!isConnected || !publicClient || !address) return;
       if (boostActive || boostCooldown || glorySec > 0) return;
       setBoostBusy(true);
@@ -2355,11 +2442,11 @@ function ActiveCard() {
           chainId: TARGET_CHAIN.id,
         });
 
-        await confirmThenRefresh(h as `0x${string}`);
+        await confirmThenRefresh(h);
       });
       setToast("Boost sent 🔥");
     } catch (e: any) {
-      setToast(tidyError(e));
+      setToast(preflightError || tidyError(e));
     } finally {
       setBoostBusy(false);
       setTimeout(() => setToast(""), 1400);
