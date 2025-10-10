@@ -3,10 +3,12 @@ import { createConfig, http } from 'wagmi';
 import { base, baseSepolia } from 'wagmi/chains';
 import { injected, walletConnect, coinbaseWallet } from 'wagmi/connectors';
 import { fallback } from 'viem'; // NEW
+import { WC_PROJECT_ID } from './lib/env';
 
 // --- Env helpers -------------------------------------------------------------
 const VITE = import.meta.env as any;
 
+<<<<<<< HEAD
 // WalletConnect (NO fallback – fail fast if missing)
 const _pid = VITE?.VITE_WALLETCONNECT_PROJECT_ID?.trim();
 if (!_pid) {
@@ -15,6 +17,8 @@ if (!_pid) {
 }
 export const WC_PROJECT_ID = _pid;
 
+=======
+>>>>>>> adf3d921e1fd5f8f271232212b701e7f2dbca104
 // Target network: "base" | "baseSepolia"
 const TARGET_NAME = (VITE?.VITE_NETWORK || 'base') as 'base' | 'baseSepolia';
 export const TARGET_CHAIN = TARGET_NAME === 'base' ? base : baseSepolia;
@@ -69,23 +73,27 @@ export const wagmiConfig = createConfig({
     // Injected covers MetaMask, Rabby, Frame, etc.
     injected({ shimDisconnect: true }),
 
-    walletConnect({
-      projectId: WC_PROJECT_ID,
-      showQrModal: false, // Web3Modal provides the modal
-      metadata: {
-        name: 'HearMeOwT',
-        description: 'MEOWT dApp',
-        url:
-          typeof window !== 'undefined'
-            ? window.location.origin
-            : 'https://meowt.app',
-        icons: [
-          typeof window !== 'undefined'
-            ? new URL('/brand/logo-meowt.png', window.location.origin).toString()
-            : '',
-        ],
-      },
-    }),
+    ...(WC_PROJECT_ID
+      ? [
+          walletConnect({
+            projectId: WC_PROJECT_ID,
+            showQrModal: false, // Web3Modal provides the modal
+            metadata: {
+              name: 'HearMeOwT',
+              description: 'MEOWT dApp',
+              url:
+                typeof window !== 'undefined'
+                  ? window.location.origin
+                  : 'https://meowt.app',
+              icons: [
+                typeof window !== 'undefined'
+                  ? new URL('/brand/logo-meowt.png', window.location.origin).toString()
+                  : '',
+              ],
+            },
+          }),
+        ]
+      : []),
 
     // Allow Smart Wallet, extension, and mobile app
     coinbaseWallet({

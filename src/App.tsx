@@ -20,15 +20,13 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { keccak256, toBytes, parseUnits } from "viem";
-import {
-  createWeb3Modal,
-  useWeb3Modal,
-} from "@web3modal/wagmi/react";
+import { useSafeWeb3Modal } from "./lib/useSafeWeb3Modal";
 import { watchAccount, watchChainId } from "wagmi/actions";
 
 // at the top of App.tsx
 import { RewardsHeaderButton, RewardsDock } from "./rewardsAuto";
 import { NetworkQuietProvider, useQuiet, runQuietly } from "./quiet";
+import W3MDebug from "./components/W3MDebug";
 
 
 // --- error tidying + tiny write retry ---
@@ -65,25 +63,6 @@ async function withRetry<T>(fn: () => Promise<T>, tries = 2, delayMs = 350): Pro
 // Optional alias to catch any leftover calls using a capital W
 export const WithRetry = withRetry;
 
-
-// -------------------- One-time Web3Modal init (guard HMR) --------------------
-const WC_PROJECT_ID = (import.meta.env as any)
-  .VITE_WALLETCONNECT_PROJECT_ID as string;
-if (!WC_PROJECT_ID) throw new Error("VITE_WALLETCONNECT_PROJECT_ID is missing");
-
-declare global {
-  interface Window {
-    __MEOWT_W3M?: boolean;
-  }
-}
-if (typeof window !== "undefined" && !window.__MEOWT_W3M) {
-  createWeb3Modal({
-    wagmiConfig,
-    projectId: WC_PROJECT_ID,
-    enableAnalytics: true,
-  });
-  window.__MEOWT_W3M = true;
-}
 
 // -------------------- ENV --------------------
 
@@ -1156,6 +1135,9 @@ const idBig = hasId ? (id as bigint) : 0n;
   const remFallback = Math.max(0, Number(remChainBN ?? 0n));
   const remSec = (endTsNum > 0 || exposureEndRef.current > 0) ? exposureLeft : remFallback;
 
+  const resolvedFlag = Boolean((m as any)?.resolved ?? (m as any)?.[10]);
+  const nukedFlag = Boolean((m as any)?.nuked ?? (m as any)?.[11]);
+
   const inGlory   = (exposureLeft === 0) && (gloryEndRef.current > nowSec);
   const gloryLeft = inGlory ? (gloryEndRef.current - nowSec) : 0;
 
@@ -1173,6 +1155,24 @@ const idBig = hasId ? (id as bigint) : 0n;
   );
   const effectiveShow   = hasId && nowSec < (untilShow + SHOW_CUSHION);
   const loading         = Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive);
+
+  React.useEffect(() => {
+    if (!hasId) return;
+    if (!resolvedFlag && !nukedFlag) return;
+
+    const chainRem = Number(remChainBN ?? 0n);
+    const chainGlory = Number(gloryRemChainBN ?? 0n);
+    const latestWindowEnd = Math.max(exposureEndRef.current, gloryEndRef.current);
+    const now = nowSec;
+
+    if (chainRem > 0 || chainGlory > 0) return;
+    if (latestWindowEnd > now) return;
+
+    const cutoff = now - (SHOW_CUSHION + 1);
+    if (showUntilRef.current > cutoff) {
+      showUntilRef.current = cutoff;
+    }
+  }, [hasId, resolvedFlag, nukedFlag, remChainBN, gloryRemChainBN, nowSec]);
 
   // === Non-zero latch for boostCost (live > batched > 0) ===
   const boostCostRef = React.useRef<bigint>(0n);
@@ -2437,7 +2437,7 @@ function AddMeowtButton() {
   return <AddMeowtButtonInner />;
 }
 function AddMeowtButtonInner() {
-  const { open } = useWeb3Modal();
+  const { open } = useSafeWeb3Modal();
   const { data: walletClient } = useWalletClient();
   const [busy, setBusy] = React.useState(false);
   const addToken = React.useCallback(async () => {
@@ -2478,16 +2478,33 @@ function AddMeowtButtonInner() {
   );
 }
 function ConnectControls() {
-  const { open } = useWeb3Modal();
+  const { open } = useSafeWeb3Modal();
   const { status, address } = useAccount();
   const { disconnect } = useDisconnect();
   const connected = status === "connected" && !!address;
   const short = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
+  const handleConnect = React.useCallback(
+    async (event?: React.MouseEvent<HTMLButtonElement>) => {
+      event?.preventDefault();
+      try {
+        await open({ view: "Connect" } as any);
+      } catch (err) {
+        console.error("[connect] Web3Modal failed, trying direct injected connect", err);
+        const ethereum = (window as any)?.ethereum;
+        if (ethereum?.request) {
+          await ethereum.request({ method: "eth_requestAccounts" });
+        } else {
+          alert("No injected wallet found and Web3Modal failed to open.");
+        }
+      }
+    },
+    [open]
+  );
   return (
     <div className="flex items-center gap-2">
       {!connected ? (
         <button
-          onClick={() => open({ view: "Connect" } as any)}
+          onClick={handleConnect}
           className="px-3 py-1.5 rounded-md font-medium bg-rose-600 text-white hover:bg-rose-700 border border-transparent"
         >
           Connect Wallet
@@ -2694,6 +2711,7 @@ export default function App() {
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={qc}>
         <NetworkQuietProvider>
+          <W3MDebug />
           <AppInner />
         </NetworkQuietProvider>
       </QueryClientProvider>
