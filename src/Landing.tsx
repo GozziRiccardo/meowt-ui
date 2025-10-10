@@ -1,4 +1,13 @@
 import React from "react";
+
+// Ensure landing page tab title is branded too
+function useTitle(title: string) {
+  React.useEffect(() => {
+    if (typeof document !== "undefined" && document.title !== title) {
+      document.title = title;
+    }
+  }, [title]);
+}
 import { useNavigate } from "react-router-dom";
 
 /* ---- Background (day/night, mobile/desktop) ---- */
@@ -95,6 +104,7 @@ function BackgroundArtLanding() {
 
 
 export default function Landing() {
+  useTitle("HearMeOwT");
   useThemeBoot();
   const navigate = useNavigate();
   const whitepaperUrl =
