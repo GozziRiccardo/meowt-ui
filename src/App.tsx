@@ -604,7 +604,7 @@ function PermanentTimerBar() {
   return (
     <div className="w-full flex justify-center">
       <div
-        className="flex items-center gap-3"
+        className="flex items-center gap-4"
         role="status"
         aria-live="polite"
         aria-label={`Time left: ${fmtClock(rem)}`}
@@ -612,18 +612,17 @@ function PermanentTimerBar() {
         <img
           src="/illustrations/time-mascot.png"
           alt=""
-          className="h-8 md:h-10 w-auto object-contain pointer-events-none select-none"
+          className="h-12 md:h-14 w-auto object-contain pointer-events-none select-none"
           draggable={false}
         />
         <div
           className={[
-            "px-3 py-1.5 rounded-full shadow",
+            "px-4 py-2 rounded-full shadow flex items-center gap-3",
             "bg-rose-600 text-white",
-            "text-sm md:text-base font-semibold tracking-wide",
+            "text-lg md:text-xl font-extrabold tracking-wide",
             "ring-1 ring-rose-700/40",
           ].join(" ")}
         >
-          <span className="opacity-95">Time left: </span>
           <span className="tabular-nums">{fmtClock(rem)}</span>
         </div>
       </div>
@@ -933,10 +932,6 @@ function MessagePreview({
   const bottomPad = (isBoost || isGlory) ? "pb-[clamp(24px,4vw,40px)]" : "";
   const ringColor = isGlory ? "!ring-amber-500" : (locked ? "!ring-red-600" : "");
   const topImg = isGlory ? GLORY_IMG : BOOST_IMG;
-  const caption = isGlory
-    ? "This meowssage has been crowned! Posting unlocks in "
-    : (isBoost ? "Boost firing! Replacement unlocks in " : "Replacement unlocks in ");
-
   const likeEnabled = canVote;
   const dislikeEnabled = canVote && !isGlory;
 
@@ -986,14 +981,6 @@ function MessagePreview({
               className="h-[clamp(36px,9vw,88px)] w-auto drop-shadow-[0_0_10px_rgba(234,179,8,0.55)]"
               draggable={false}
             />
-          </div>
-        )}
-
-        {left > 0 && (
-          <div className={`mt-1 mb-2 text-sm font-semibold ${
-            isGlory ? "text-amber-700 dark:text-amber-300" : "text-red-700 dark:text-red-300"
-          }`}>
-            {caption}{fmtClock(left)}
           </div>
         )}
 
@@ -2644,14 +2631,14 @@ function ActiveCard() {
 function Mascots() {
   return (
     <>
-      <div className="pointer-events-none select-none fixed top-1/2 left-0 -translate-y-1/2 z-30 hidden lg:block">
+      <div className="pointer-events-none select-none fixed top-1/2 left-0 -translate-y-1/2 z-10 hidden lg:block">
         <img
           src="/mascots/left.png"
           alt=""
           className="object-contain drop-shadow-xl opacity-100 translate-x-[-6%] max-h-[46vh] md:max-h-[54vh] xl:max-h-[60vh] w-auto"
         />
       </div>
-      <div className="pointer-events-none select-none fixed top-1/2 right-0 -translate-y-1/2 z-30 hidden lg:block">
+      <div className="pointer-events-none select-none fixed top-1/2 right-0 -translate-y-1/2 z-10 hidden lg:block">
         <img
           src="/mascots/right.png"
           alt=""
@@ -2811,29 +2798,6 @@ function ConnectBar() {
 }
 
 
-function TimerBar() {
-  const snap = useSnap();
-  const rem = Number((snap as any)?.rem ?? 0n);
-  const show = Boolean((snap as any)?.show);
-  if (!show || rem <= 0) return null;
-  return (
-    <div className="mx-auto max-w-3xl px-3">
-      <div className="mt-2 mb-1 flex flex-col items-center gap-2">
-        <img
-          src="/illustrations/time-mascot.png"
-          alt=""
-          className="h-10 md:h-12 object-contain select-none pointer-events-none"
-          draggable={false}
-        />
-        <div className="px-3 py-1.5 rounded-full text-2xl md:text-3xl font-extrabold bg-red-600 text-white shadow flex items-center gap-2">
-          <span>⏳</span>
-          <span>{fmtClock(rem)}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // -------------------- Toast --------------------
 function Toast({ text }: { text: string }) {
   if (!text) return null;
@@ -2961,9 +2925,6 @@ function AppInner() {
       <main className="max-w-3xl mx-auto px-3 pb-14">
         <GameSnapshotProvider>
           <PrefetchRequired />
-          {/* InstallBanner is fixed; no layout shift here */}
-          <TimerBar />
-
           <section className="relative z-20 mt-4 flex flex-col gap-6 items-stretch">
             {/* Permanent expiration counter lives above the message box */}
             <PermanentTimerBar />
