@@ -2794,6 +2794,14 @@ function AppInner() {
 
 // -------------------- App root --------------------
 export default function App() {
+  // Ensure the tab title is always correct, even if cached HTML had an old one.
+  React.useEffect(() => {
+    const desired = "HearMeOwT";
+    if (typeof document !== "undefined" && document.title !== desired) {
+      document.title = desired;
+    }
+  }, []);
+
   return (
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={qc}>
