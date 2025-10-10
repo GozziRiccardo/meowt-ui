@@ -1,4 +1,5 @@
 // src/wagmi.ts
+import { createWeb3Modal } from '@web3modal/wagmi/react'
 import { createConfig, http } from 'wagmi'
 import { base, baseSepolia } from 'wagmi/chains'
 import { injected, walletConnect, coinbaseWallet } from 'wagmi/connectors'
@@ -8,10 +9,10 @@ import { fallback } from 'viem'
 const VITE = import.meta.env as any
 
 // WalletConnect (NO fallback – fail fast if missing)
-const _pid = VITE?.VITE_WALLETCONNECT_PROJECT_ID?.trim()
+const _pid = VITE?.VITE_WC_PROJECT_ID?.trim()
 if (!_pid) {
-  console.error('[ENV] Missing VITE_WALLETCONNECT_PROJECT_ID')
-  throw new Error('VITE_WALLETCONNECT_PROJECT_ID is required')
+  console.error('[ENV] Missing VITE_WC_PROJECT_ID')
+  throw new Error('VITE_WC_PROJECT_ID is required')
 }
 export const WC_PROJECT_ID = _pid
 
@@ -62,12 +63,13 @@ export const wagmiConfig = createConfig({
       showQrModal: false, // Web3Modal will render the modal
       metadata: {
         name: 'HearMeOwT',
-        description: 'MEOWT dApp',
-        url: typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.app',
+        description: 'Post, vote, and earn $MEOWT.',
+        url:
+          typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.xyz',
         icons: [
           typeof window !== 'undefined'
             ? new URL('/brand/logo-meowt.png', window.location.origin).toString()
-            : '',
+            : 'https://hearmeowt.xyz/brand/logo-meowt.png',
         ],
       },
     }),
@@ -80,4 +82,14 @@ export const wagmiConfig = createConfig({
 
   multiInjectedProviderDiscovery: true,
   // pollingInterval: 1500, // optional if you want faster block polling
+})
+
+createWeb3Modal({
+  wagmiConfig,
+  projectId: WC_PROJECT_ID,
+  defaultChain: TARGET_CHAIN,
+  enableAnalytics: false,
+  themeVariables: {
+    '--w3m-accent': '#f43f5e',
+  },
 })
