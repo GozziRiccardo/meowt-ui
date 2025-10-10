@@ -45,6 +45,7 @@ function isTransient(err: any) {
   return (
     m.includes("rate limit") ||
     m.includes("429") ||
+    m.includes("status code") ||
     m.includes("timeout") ||
     m.includes("gateway") ||
     m.includes("rpc request failed") ||
@@ -52,6 +53,8 @@ function isTransient(err: any) {
     m.includes("replacement underpriced") ||
     m.includes("nonce too low") ||
     m.includes("failed to fetch") ||
+    m.includes("internal server error") ||
+    m.includes("transaction does not have a transaction hash") ||
     m.includes("network")
   );
 }
@@ -230,16 +233,58 @@ async function ensureOnTargetChain(): Promise<void> {
 }
 
 // Robustly extract a hex tx hash from various wallet return shapes
-function extractHash(maybe: any): `0x${string}` | undefined {
+const HASH_KEYS = [
+  "hash",
+  "transactionHash",
+  "txnHash",
+  "txHash",
+  "transaction_hash",
+  "tx_hash",
+];
+
+function normalizeHexMaybe(value: string): `0x${string}` | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const lower = trimmed.toLowerCase();
+  if (!lower.startsWith("0x")) return undefined;
+  if (lower.length !== 66) return undefined;
+  for (let i = 2; i < lower.length; i++) {
+    const code = lower.charCodeAt(i);
+    const isHex = (code >= 48 && code <= 57) || (code >= 97 && code <= 102);
+    if (!isHex) return undefined;
+  }
+  return (`0x${lower.slice(2)}`) as `0x${string}`;
+}
+
+function extractHash(maybe: any, depth = 0, seen = new Set<any>()): `0x${string}` | undefined {
   try {
-    if (!maybe) return undefined;
-    if (typeof maybe === "string" && maybe.startsWith("0x")) return maybe as `0x${string}`;
+    if (maybe == null) return undefined;
+    if (seen.has(maybe)) return undefined;
+    if (depth > 4) return undefined;
+    if (typeof maybe === "string") return normalizeHexMaybe(maybe);
     if (typeof maybe === "object") {
-      const h =
-        (maybe as any)?.hash ||
-        (maybe as any)?.transactionHash ||
-        (maybe as any)?.txnHash;
-      if (typeof h === "string" && h.startsWith("0x")) return h as `0x${string}`;
+      seen.add(maybe);
+      for (const key of HASH_KEYS) {
+        if (key in (maybe as any)) {
+          const found = extractHash((maybe as any)[key], depth + 1, seen);
+          if (found) return found;
+        }
+      }
+      if (Array.isArray(maybe)) {
+        for (const item of maybe) {
+          const found = extractHash(item, depth + 1, seen);
+          if (found) return found;
+        }
+      } else {
+        const extraKeys = ["result", "data", "cause", "error", "receipt", "transaction"];
+        for (const key of extraKeys) {
+          if (key in (maybe as any)) {
+            const found = extractHash((maybe as any)[key], depth + 1, seen);
+            if (found) return found;
+          }
+        }
+      }
     }
   } catch {}
   return undefined;
@@ -297,7 +342,7 @@ async function simThenWrite(opts: {
     args,
     blockTag: "pending" as const,
   };
-  const baseWrite = { account, address, abi, functionName, args };
+  const baseWrite = { account, address, abi, functionName, args, chainId: opts.chainId };
 
   let request: any | undefined;
   async function refreshSimulation() {
@@ -345,6 +390,7 @@ async function simThenWrite(opts: {
 
     const submission: any = request ? { ...request } : { ...baseWrite };
     submission.account = account;
+    submission.chainId = opts.chainId;
     submission.gas = gas;
     if (typeof fees.maxFeePerGas === "bigint") submission.maxFeePerGas = fees.maxFeePerGas;
     if (typeof fees.maxPriorityFeePerGas === "bigint") submission.maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
@@ -361,6 +407,10 @@ async function simThenWrite(opts: {
       }
       return txHash;
     } catch (err) {
+      const recoveredHash = extractHash(err);
+      if (recoveredHash) {
+        return recoveredHash;
+      }
       lastError = err;
       if (!isTransient(err)) throw err;
       request = undefined;
