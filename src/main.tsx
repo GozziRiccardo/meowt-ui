@@ -1,5 +1,16 @@
 // src/main.tsx
 
+// PWA: register a no-op SW in production only (won't cache or intercept fetch)
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/sw.js')
+      .catch(() => {
+        /* ignore */
+      })
+  })
+}
+
 import './polyfills'
 import './web3modal'
 import './index.css'

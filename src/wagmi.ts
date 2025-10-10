@@ -62,12 +62,12 @@ export const wagmiConfig = createConfig({
       showQrModal: false, // Web3Modal will render the modal
       metadata: {
         name: 'HearMeOwT',
-        description: 'MEOWT dApp',
-        url: typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.app',
+        description: 'Post, vote, and earn $MEOWT.',
+        url: typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.xyz',
         icons: [
           typeof window !== 'undefined'
             ? new URL('/brand/logo-meowt.png', window.location.origin).toString()
-            : '',
+            : 'https://hearmeowt.xyz/brand/logo-meowt.png',
         ],
       },
     }),

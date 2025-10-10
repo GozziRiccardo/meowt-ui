@@ -1,5 +1,13 @@
 // src/App.tsx — HearMeOwT ($MEOWT) — Base mainnet hardened build
 import * as React from "react";
+// Ensure tab title is branded even if index.html is stale
+function useTitle(title: string) {
+  React.useEffect(() => {
+    if (typeof document !== "undefined" && document.title !== title) {
+      document.title = title;
+    }
+  }, [title]);
+}
 import { createPortal } from "react-dom";
 import {
   WagmiProvider,
@@ -2730,6 +2738,9 @@ function AppInner() {
   const authorKnown = looksAddress(stableAuthor || rawAuthor);
   const activeAuthorLc = (stableAuthor || rawAuthor || "").toLowerCase();
   const iAmAuthor = !!myAddr && !!authorKnown && myAddr === activeAuthorLc;
+
+  // Brand the tab
+  useTitle("HearMeOwT");
 
   return (
     <div className="min-h-screen bg-[radial-gradient(1200px_600px_at_50%_0%,rgba(244,63,94,0.12),transparent_70%)] bg-gradient-to-b from-rose-50 to-white dark:from-neutral-950 dark:to-neutral-900 text-neutral-900 dark:text-neutral-100">
