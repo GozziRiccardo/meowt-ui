@@ -569,25 +569,6 @@ export function FinalizingMask({
   imgUrl?: string;
   message?: string;
 }) {
-  const getDims = () => {
-    const vv = (window as any).visualViewport;
-    return {
-      w: Math.round(vv?.width ?? window.innerWidth),
-      h: Math.round(vv?.height ?? window.innerHeight),
-    };
-  };
-  const [dims, setDims] = React.useState(getDims);
-  React.useEffect(() => {
-    const onResize = () => setDims(getDims());
-    window.addEventListener("resize", onResize);
-    window.addEventListener("orientationchange", onResize);
-    (window as any).visualViewport?.addEventListener?.("resize", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("orientationchange", onResize);
-      (window as any).visualViewport?.removeEventListener?.("resize", onResize);
-    };
-  }, []);
   React.useEffect(() => {
     const scrollY = window.scrollY;
     const prev = {
@@ -610,11 +591,10 @@ export function FinalizingMask({
   }, []);
   return createPortal(
     <div
-      className="fixed left-0 top-0 z-[99999] pointer-events-auto"
+      className="fixed inset-0 z-[99999] pointer-events-auto"
       role="dialog"
       aria-modal="true"
       aria-label="Finalizing"
-      style={{ width: `${dims.w}px`, height: `${dims.h}px` }}
     >
       <div className="absolute inset-0 bg-black/90" />
       {imgUrl && (
@@ -625,7 +605,10 @@ export function FinalizingMask({
           draggable={false}
         />
       )}
-      <div className="absolute left-0 right-0 flex justify-center" style={{ top: 16 }}>
+      <div
+        className="absolute left-0 right-0 flex justify-center"
+        style={{ top: "calc(16px + env(safe-area-inset-top, 0px))" }}
+      >
         <div className="px-3 py-1.5 rounded-full text-sm font-semibold bg-black/85 text-white shadow-md">
           {message} {secondsLeft}s
         </div>
@@ -2632,15 +2615,24 @@ function ConnectBar() {
 }
 
 
-function DevClock() {
+function TimerBar() {
   const snap = useSnap();
   const rem = Number((snap as any)?.rem ?? 0n);
-  const glory = Number((snap as any)?.gloryRem ?? 0);
   const show = Boolean((snap as any)?.show);
+  if (!show || rem <= 0) return null;
   return (
     <div className="mx-auto max-w-3xl px-3">
-      <div className="mt-2 rounded-md border border-black/10 dark:border-white/10 text-xs px-2 py-1 opacity-70">
-        rem: {fmtClock(rem)} · glory: {fmtClock(glory)} · show:{String(show)}
+      <div className="mt-2 mb-1 flex flex-col items-center gap-2">
+        <img
+          src="/illustrations/time-mascot.png"
+          alt=""
+          className="h-10 md:h-12 object-contain select-none pointer-events-none"
+          draggable={false}
+        />
+        <div className="px-3 py-1.5 rounded-full text-2xl md:text-3xl font-extrabold bg-red-600 text-white shadow flex items-center gap-2">
+          <span>⏳</span>
+          <span>{fmtClock(rem)}</span>
+        </div>
       </div>
     </div>
   );
@@ -2769,7 +2761,7 @@ function AppInner() {
       <main className="max-w-3xl mx-auto px-3 pb-14">
         <GameSnapshotProvider>
           <PrefetchRequired />
-          <DevClock />
+          <TimerBar />
 
           <section className="relative z-20 mt-4 flex flex-col gap-6 items-stretch">
             <ActiveCard />
