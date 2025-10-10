@@ -476,6 +476,56 @@ function encodeInline(text: string) { return `meow:text:${encodeURIComponent(tex
 function fmtMEOW(x?: bigint) { return typeof x === "bigint" ? Number(x) / 1e18 : undefined; }
 function two(x?: number) { return typeof x === "number" && Number.isFinite(x) ? x.toFixed(2) : "—"; }
 
+// -------------------- Permanent expiration counter (centered above message) --------------------
+/**
+ * Always-visible expiration countdown (only tracks exposure/expiration time).
+ * - Ignores other windows (boost/glory/immunity) by design.
+ * - Consumes `snap.rem` and renders "Time left: M:SS" next to the time-mascot.
+ * - Renders above the message box, centered.
+ */
+function PermanentTimerBar() {
+  const snap = useSnap();
+  // `rem` is the remaining exposure/expiration seconds returned by GameSnapshot
+  const rem = Number((snap as any)?.rem ?? 0n);
+
+  // Lightweight tick so the label stays fresh even between query nudges
+  const [, forceTick] = React.useState(0);
+  React.useEffect(() => {
+    const id = setInterval(() => forceTick((x) => x + 1), 500);
+    return () => clearInterval(id);
+  }, []);
+
+  // Keep it compact but visible; group is centered
+  return (
+    <div className="w-full flex justify-center">
+      <div
+        className="flex items-center gap-3"
+        role="status"
+        aria-live="polite"
+        aria-label={`Time left: ${fmtClock(rem)}`}
+      >
+        <img
+          src="/illustrations/time-mascot.png"
+          alt=""
+          className="h-8 md:h-10 w-auto object-contain pointer-events-none select-none"
+          draggable={false}
+        />
+        <div
+          className={[
+            "px-3 py-1.5 rounded-full shadow",
+            "bg-rose-600 text-white",
+            "text-sm md:text-base font-semibold tracking-wide",
+            "ring-1 ring-rose-700/40",
+          ].join(" ")}
+        >
+          <span className="opacity-95">Time left: </span>
+          <span className="tabular-nums">{fmtClock(rem)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // -------------------- Visual skeletons --------------------
 function PreviewSkeleton() {
   return (
@@ -2778,6 +2828,8 @@ function AppInner() {
           <TimerBar />
 
           <section className="relative z-20 mt-4 flex flex-col gap-6 items-stretch">
+            {/* Permanent expiration counter lives above the message box */}
+            <PermanentTimerBar />
             <ActiveCard />
             {isConnected && onTarget && hasActive && authorKnown && !iAmAuthor ? <ReplaceBox /> : null}
             {isConnected && onTarget ? <PostBox /> : null}
