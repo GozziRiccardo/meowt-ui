@@ -2767,6 +2767,7 @@ function ConnectControls() {
   const { connectAsync, connectors } = useConnect();
   const connected = status === "connected" && !!address;
   const short = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
+  // Prefer a ready injected connector if present (MetaMask/Rabby/CBW extension)
   const pickInjected = React.useCallback(() => {
     const list = connectors || [];
     const injected =
@@ -2777,43 +2778,57 @@ function ConnectControls() {
     if (injected && (injected as any).ready !== false) return injected;
     return undefined;
   }, [connectors]);
+
   const handleConnect = React.useCallback(
     async (event?: React.MouseEvent<HTMLButtonElement>) => {
       event?.preventDefault();
-      ensureWeb3ModalLoaded();
+      // 1) Try injected connector first
       try {
         const injected = pickInjected();
         if (injected) {
-          try {
-            await connectAsync({ connector: injected });
-            return;
-          } catch (injErr) {
-            console.warn("[connect] Injected connector failed, falling back to modal", injErr);
-          }
+          await connectAsync({ connector: injected });
+          return;
         }
+      } catch (injErr) {
+        console.warn("[connect] Injected connector failed, continuing to modal", injErr);
+      }
 
+      // 2) Open Web3Modal (which will handle WalletConnect and deep links on mobile)
+      let modalTried = false;
+      try {
+        ensureWeb3ModalLoaded();
+        await open({ view: "Connect" } as any);
+        return;
+      } catch (modalErr1) {
+        console.error("[connect] Web3Modal open failed (first attempt)", modalErr1);
+        modalTried = true;
+        // Retry once in case init failed earlier; re-init and try open again.
         try {
+          (window as any).__w3mInit = false;
+          ensureWeb3ModalLoaded();
           await open({ view: "Connect" } as any);
           return;
-        } catch (modalErr) {
-          console.error("[connect] Web3Modal open failed", modalErr);
-          const eth = (window as any)?.ethereum;
-          if (eth?.request) {
-            try {
-              await eth.request({ method: "eth_requestAccounts" });
-              return;
-            } catch (rawErr) {
-              console.error("[connect] eth_requestAccounts failed", rawErr);
-            }
-          }
-          alert(
-            "Unable to open a wallet connection option. If you use a browser wallet, unlock it and try again — otherwise pick a wallet from the Web3Modal picker."
-          );
+        } catch (modalErr2) {
+          console.error("[connect] Web3Modal open failed (retry)", modalErr2);
         }
-      } catch (err) {
-        console.error("[connect] Unexpected error in handleConnect", err);
-        alert("Could not start a wallet connection. Please try again.");
       }
+
+      // 3) Last-ditch: if a provider exists, try raw request (helps some mobile browsers)
+      try {
+        const eth = (window as any)?.ethereum;
+        if (eth?.request) {
+          await eth.request({ method: "eth_requestAccounts" });
+          return;
+        }
+      } catch (rawErr) {
+        console.error("[connect] eth_requestAccounts failed", rawErr);
+      }
+
+      alert(
+        modalTried
+          ? "Couldn’t open the wallet picker. If you have a wallet app (e.g. MetaMask), open it once, then come back and try again."
+          : "No browser wallet detected. Please pick a wallet from the connection modal."
+      );
     },
     [open, pickInjected, connectAsync]
   );
