@@ -29,6 +29,7 @@ import {
 } from "@tanstack/react-query";
 import { keccak256, toBytes, parseUnits } from "viem";
 import { useSafeWeb3Modal } from "./lib/useSafeWeb3Modal";
+import { ensureWeb3ModalLoaded } from "./web3modal";
 import { watchAccount, watchChainId } from "wagmi/actions";
 
 // at the top of App.tsx
@@ -2764,11 +2765,22 @@ function ConnectControls() {
   const { disconnect } = useDisconnect();
   const connected = status === "connected" && !!address;
   const short = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
+  const openWalletConnectMenu = React.useCallback(async () => {
+    await open({ view: "Connect" } as any);
+    try {
+      const { RouterController } = await import("@web3modal/core");
+      RouterController.push("ConnectWallets");
+    } catch (routerErr) {
+      console.warn("[connect] Unable to force WalletConnect view", routerErr);
+    }
+  }, [open]);
   const handleConnect = React.useCallback(
     async (event?: React.MouseEvent<HTMLButtonElement>) => {
       event?.preventDefault();
+      ensureWeb3ModalLoaded();
       try {
         await open({ view: "Connect" } as any);
+        return;
       } catch (err) {
         console.error("[connect] Web3Modal failed, trying fallback options", err);
         const ethereum = (window as any)?.ethereum;
@@ -2781,7 +2793,7 @@ function ConnectControls() {
         }
 
         try {
-          await open({ view: "ConnectWallets" } as any);
+          await openWalletConnectMenu();
           return;
         } catch (wcErr) {
           console.error("[connect] WalletConnect menu fallback failed", wcErr);
@@ -2790,7 +2802,7 @@ function ConnectControls() {
         alert("Unable to open a wallet connection option. Please try again.");
       }
     },
-    [open]
+    [open, openWalletConnectMenu]
   );
   return (
     <div className="flex items-center gap-2">
