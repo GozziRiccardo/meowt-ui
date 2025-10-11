@@ -2835,43 +2835,32 @@ function ConnectControls() {
         console.warn('[connect] Injected connector failed:', injErr);
       }
 
-      console.log('[connect] Ensuring Web3Modal is loaded…');
-      ensureWeb3ModalLoaded();
-
-      await new Promise((resolve) => setTimeout(resolve, 150));
-
-      let modalOpened = false;
+      // 2) DIRECT WalletConnect (WC UIKit modal; no Web3Modal Explorer dependency)
       try {
-        console.log('[connect] Opening WalletConnect QR/deeplink modal…');
-        await open({ view: "Connect" } as any);
-        modalOpened = true;
-        console.log('[connect] Web3Modal opened successfully');
-
-        try {
-          const { RouterController } = await import("@web3modal/core");
-          RouterController.push("ConnectWallets");
-        } catch (routerErr) {
-          console.debug('[connect] RouterController unavailable (non-critical):', routerErr);
+        const wc = pickWalletConnect();
+        if (wc) {
+          console.log('[connect] Opening WalletConnect modal…');
+          await connectAsync({ connector: wc });
+          console.log('[connect] WalletConnect connection successful!');
+          return done();
+        } else {
+          console.log('[connect] No WalletConnect connector found');
         }
+      } catch (wcErr) {
+        console.error('[connect] WalletConnect connector failed:', wcErr);
+      }
+
+      // 3) LAST RESORT: Web3Modal UI (kept for account panel or if it does render)
+      try {
+        console.log('[connect] Ensuring Web3Modal is loaded…');
+        ensureWeb3ModalLoaded();
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        console.log('[connect] Opening Web3Modal…');
+        await open({ view: "Connect" } as any);
+        console.log('[connect] Web3Modal opened successfully');
         return done();
       } catch (modalErr) {
         console.error('[connect] Web3Modal failed to open:', modalErr);
-      }
-
-      if (!modalOpened) {
-        try {
-          console.log('[connect] Attempting direct WalletConnect connection…');
-          const wc = pickWalletConnect();
-          if (wc) {
-            await connectAsync({ connector: wc });
-            console.log('[connect] WalletConnect connection successful!');
-            return done();
-          } else {
-            console.log('[connect] No WalletConnect connector found');
-          }
-        } catch (wcErr) {
-          console.error('[connect] WalletConnect connector failed:', wcErr);
-        }
       }
 
       try {

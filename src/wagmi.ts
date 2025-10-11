@@ -3,9 +3,9 @@ import { createConfig, http } from 'wagmi'
 import { base, baseSepolia } from 'wagmi/chains'
 import { injected, walletConnect, coinbaseWallet } from 'wagmi/connectors'
 import { fallback } from 'viem'
-import { WC_PROJECT_ID, WC_FORCE_QR } from './lib/env'
+import { WC_PROJECT_ID } from './lib/env'
 
-export { WC_PROJECT_ID, WC_FORCE_QR } from './lib/env'
+export { WC_PROJECT_ID } from './lib/env'
 
 // --- Env helpers -------------------------------------------------------------
 type ViteEnv = ImportMetaEnv & {
@@ -68,8 +68,7 @@ export const wagmiConfig = createConfig({
     injected({ shimDisconnect: true }),
     walletConnect({
       projectId: WC_PROJECT_ID!,
-      // If WC_FORCE_QR is true, WalletConnect shows its own modal (bypassing Web3Modal)
-      showQrModal: WC_FORCE_QR,
+      showQrModal: true, // ← always show WalletConnect’s own modal (reliable)
       metadata: {
         name: 'HearMeOwT',
         description: 'Post, vote, and earn $MEOWT.',

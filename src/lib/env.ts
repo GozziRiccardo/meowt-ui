@@ -1,13 +1,6 @@
-// Use a single, canonical env var name across the app
+// Canonical WalletConnect PID
 export const WC_PROJECT_ID =
   (import.meta as any)?.env?.VITE_WALLETCONNECT_PROJECT_ID as string | undefined
-
-// Optional kill-switch to force WalletConnect's *own* QR/deeplink modal
-// (bypasses Web3Modal's Explorer API entirely)
-export const WC_FORCE_QR =
-  String((import.meta as any)?.env?.VITE_WC_FORCE_QR ?? '')
-    .trim()
-    .toLowerCase() === 'true'
 
 export function assertEnv() {
   if (!WC_PROJECT_ID || typeof WC_PROJECT_ID !== 'string' || WC_PROJECT_ID.trim().length < 8) {
