@@ -3,9 +3,9 @@ import { createConfig, http } from 'wagmi'
 import { base, baseSepolia } from 'wagmi/chains'
 import { injected, walletConnect, coinbaseWallet } from 'wagmi/connectors'
 import { fallback } from 'viem'
-import { WC_PROJECT_ID as ENV_WC_PROJECT_ID } from './lib/env'
+import { WC_PROJECT_ID, WC_FORCE_QR } from './lib/env'
 
-export { WC_PROJECT_ID } from './lib/env'
+export { WC_PROJECT_ID, WC_FORCE_QR } from './lib/env'
 
 // --- Env helpers -------------------------------------------------------------
 type ViteEnv = ImportMetaEnv & {
@@ -19,7 +19,7 @@ type ViteEnv = ImportMetaEnv & {
 const VITE = import.meta.env as ViteEnv
 
 // WalletConnect (NO fallback – fail fast if missing)
-if (!ENV_WC_PROJECT_ID) {
+if (!WC_PROJECT_ID) {
   console.error('[ENV] Missing VITE_WALLETCONNECT_PROJECT_ID')
   throw new Error('VITE_WALLETCONNECT_PROJECT_ID is required')
 }
@@ -67,12 +67,9 @@ export const wagmiConfig = createConfig({
   connectors: [
     injected({ shimDisconnect: true }),
     walletConnect({
-      projectId: ENV_WC_PROJECT_ID!,
-      // IMPORTANT:
-      // Turn ON the WalletConnect QR/deeplink modal so that a direct
-      // programmatic connect() shows a UI even if Web3Modal’s wallet list
-      // fails to load (e.g., 403 due to missing allowed origins).
-      showQrModal: true,
+      projectId: WC_PROJECT_ID!,
+      // If WC_FORCE_QR is true, WalletConnect shows its own modal (bypassing Web3Modal)
+      showQrModal: WC_FORCE_QR,
       metadata: {
         name: 'HearMeOwT',
         description: 'Post, vote, and earn $MEOWT.',
