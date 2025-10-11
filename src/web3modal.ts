@@ -21,19 +21,28 @@ export function ensureWeb3ModalLoaded(): boolean {
     return false
   }
   try {
-    ;(createWeb3Modal as any)({
+    const opts: any = {
       wagmiConfig,
       projectId: WC_PROJECT_ID,
       defaultChain: TARGET_CHAIN,
       themeMode: 'dark',
-      // Force on-top so app overlays can’t hide it.
-      themeVariables: { zIndex: '2147483647' },
-      // Keep noise down; this only disables telemetry.
+      // Keep modal above everything
+      themeVariables: { '--w3m-z-index': '2147483646' },
+      // Disable analytics beacon (pulse.walletconnect.org)
       enableAnalytics: false,
-      // IMPORTANT: leave Explorer enabled so the wallet list renders
-      // once your origins are allow-listed in WalletConnect Cloud.
-      enableExplorer: true,
-    })
+      // Hard-disable Explorer calls to api.web3modal.org (prevents 403s)
+      explorerRecommendedWalletIds: 'NONE',
+      featuredWalletIds: [],
+      // Provide a minimal static list so the UI still has entries without Explorer
+      mobileWallets: [
+        { id: 'metamask' },
+        { id: 'coinbaseWallet' },
+        { id: 'rainbow' },
+        { id: 'trust' },
+      ],
+      desktopWallets: [{ id: 'metamask' }, { id: 'rabby' }, { id: 'coinbaseWallet' }],
+    }
+    ;(createWeb3Modal as any)(opts)
     window.__w3mInit = true
     console.log('[web3modal] created')
     return true

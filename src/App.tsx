@@ -2763,9 +2763,9 @@ function AddMeowtButtonInner() {
 function ConnectControls() {
   const { open } = useSafeWeb3Modal();
   const { status, address } = useAccount();
+  const connectingRef = React.useRef(false);
   const { disconnect } = useDisconnect();
   const { connectAsync, connectors } = useConnect();
-  const connectingRef = React.useRef(false);
   const connected = status === "connected" && !!address;
   const short = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
   // helpers to pick injected / walletconnect connectors from wagmi
@@ -2798,71 +2798,95 @@ function ConnectControls() {
   const handleConnect = React.useCallback(
     async (event?: React.MouseEvent<HTMLButtonElement>) => {
       event?.preventDefault();
+
       if (connectingRef.current) {
-        console.log('[connect] Already connecting; ignoring click')
+        console.log('[connect] Already connecting; ignoring click');
         return;
       }
+      connectingRef.current = true;
+      const done = () => {
+        connectingRef.current = false;
+      };
 
-      console.log('[connect] Starting connection flow...')
+      console.log('[connect] Starting connection flow…');
 
       try {
         const injected = hasBrowserWallet ? pickInjected() : undefined;
         if (injected) {
-          console.log('[connect] Found injected connector, attempting connection...')
-          await connectAsync({ connector: injected });
-          console.log('[connect] Injected connection successful!')
-          return;
+          console.log('[connect] Found injected connector, attempting connection…');
+          try {
+            await connectAsync({ connector: injected });
+          } catch (injErr: any) {
+            const code = (injErr && (injErr.code ?? injErr?.cause?.code)) || 0;
+            const msg = String(injErr?.message || injErr);
+            if (code === 4001 || /user rejected/i.test(msg)) {
+              try {
+                await (injected as any)?.disconnect?.();
+              } catch {}
+            }
+            throw injErr;
+          }
+          console.log('[connect] Injected connection successful!');
+          return done();
         } else {
-          console.log('[connect] No injected connector found')
+          console.log('[connect] No injected connector found');
         }
       } catch (injErr) {
         console.warn('[connect] Injected connector failed:', injErr);
       }
 
-      // Primary fallback: open WalletConnect’s OWN QR/deeplink modal (since we set showQrModal: true).
-      try {
-        const wc = pickWalletConnect();
-        if (wc) {
-          console.log('[connect] Opening WalletConnect QR/deeplink modal…')
-          connectingRef.current = true;
-          try {
-            await connectAsync({ connector: wc });
-            console.log('[connect] WalletConnect session established')
-            return;
-          } finally {
-            connectingRef.current = false;
-          }
-        } else {
-          console.log('[connect] No WalletConnect connector found')
-        }
-      } catch (wcErr) {
-        console.error('[connect] WalletConnect connector failed:', wcErr);
-      }
+      console.log('[connect] Ensuring Web3Modal is loaded…');
+      ensureWeb3ModalLoaded();
 
-      // Secondary fallback: open Web3Modal (will still work for installed wallets or deep-link routes).
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      let modalOpened = false;
       try {
-        console.log('[connect] Ensuring Web3Modal is loaded...')
-        ensureWeb3ModalLoaded();
+        console.log('[connect] Opening WalletConnect QR/deeplink modal…');
         await open({ view: "Connect" } as any);
-        console.log('[connect] Web3Modal opened')
-        return;
+        modalOpened = true;
+        console.log('[connect] Web3Modal opened successfully');
+
+        try {
+          const { RouterController } = await import("@web3modal/core");
+          RouterController.push("ConnectWallets");
+        } catch (routerErr) {
+          console.debug('[connect] RouterController unavailable (non-critical):', routerErr);
+        }
+        return done();
       } catch (modalErr) {
         console.error('[connect] Web3Modal failed to open:', modalErr);
+      }
+
+      if (!modalOpened) {
+        try {
+          console.log('[connect] Attempting direct WalletConnect connection…');
+          const wc = pickWalletConnect();
+          if (wc) {
+            await connectAsync({ connector: wc });
+            console.log('[connect] WalletConnect connection successful!');
+            return done();
+          } else {
+            console.log('[connect] No WalletConnect connector found');
+          }
+        } catch (wcErr) {
+          console.error('[connect] WalletConnect connector failed:', wcErr);
+        }
       }
 
       try {
         const eth = (window as any)?.ethereum;
         if (eth?.request) {
-          console.log('[connect] Attempting eth_requestAccounts...')
+          console.log('[connect] Attempting eth_requestAccounts…');
           await eth.request({ method: "eth_requestAccounts" });
-          console.log('[connect] eth_requestAccounts successful!')
-          return;
+          console.log('[connect] eth_requestAccounts successful!');
+          return done();
         }
       } catch (rawErr) {
         console.error('[connect] eth_requestAccounts failed:', rawErr);
       }
 
-      console.error('[connect] All connection methods failed')
+      console.error('[connect] All connection methods failed');
       alert(
         "Could not connect to a wallet. Please:\n\n" +
           "• Install a wallet app (MetaMask, Coinbase Wallet, etc.)\n" +
@@ -2870,6 +2894,7 @@ function ConnectControls() {
           "• Try refreshing the page\n\n" +
           "If the problem persists, try opening this site directly in your wallet's browser."
       );
+      done();
     },
     [open, connectAsync, pickInjected, pickWalletConnect, hasBrowserWallet]
   );
