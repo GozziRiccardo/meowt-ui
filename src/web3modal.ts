@@ -25,7 +25,11 @@ export function ensureWeb3ModalLoaded(): boolean {
       wagmiConfig,
       projectId: WC_PROJECT_ID,
       defaultChain: TARGET_CHAIN,
-      themeMode: 'dark'
+      themeMode: 'dark',
+      // Avoid 400/403 noise from analytics/catalog endpoints when the
+      // WC Cloud project doesn't have domains configured yet.
+      // (Does not affect QR or core pairing.)
+      enableAnalytics: false
     })
     window.__w3mInit = true
     console.log('[web3modal] created')

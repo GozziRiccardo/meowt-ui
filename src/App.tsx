@@ -2765,6 +2765,7 @@ function ConnectControls() {
   const { status, address } = useAccount();
   const { disconnect } = useDisconnect();
   const { connectAsync, connectors } = useConnect();
+  const connectingRef = React.useRef(false);
   const connected = status === "connected" && !!address;
   const short = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
   // helpers to pick injected / walletconnect connectors from wagmi
@@ -2797,6 +2798,10 @@ function ConnectControls() {
   const handleConnect = React.useCallback(
     async (event?: React.MouseEvent<HTMLButtonElement>) => {
       event?.preventDefault();
+      if (connectingRef.current) {
+        console.log('[connect] Already connecting; ignoring click')
+        return;
+      }
 
       console.log('[connect] Starting connection flow...')
 
@@ -2832,7 +2837,28 @@ function ConnectControls() {
         } catch (routerErr) {
           console.debug('[connect] RouterController unavailable (non-critical):', routerErr);
         }
-        return;
+        // IMPORTANT:
+        // Even if the wallet catalog API 403s, we can still start a WalletConnect
+        // pairing to force the QR / deep-link UI to render. Do it right after opening.
+        try {
+          const wc = pickWalletConnect();
+          if (wc) {
+            console.log('[connect] Starting WalletConnect pairing…')
+            connectingRef.current = true;
+            try {
+              await connectAsync({ connector: wc });
+              console.log('[connect] WalletConnect pairing started')
+              return;
+            } finally {
+              connectingRef.current = false;
+            }
+          } else {
+            console.log('[connect] No WalletConnect connector found after opening modal')
+          }
+        } catch (wcStartErr) {
+          // Non-fatal: keep modal open so user can choose manually if list loads.
+          console.warn('[connect] WalletConnect pairing failed to start:', wcStartErr);
+        }
       } catch (modalErr) {
         console.error('[connect] Web3Modal failed to open:', modalErr);
       }
@@ -2842,7 +2868,12 @@ function ConnectControls() {
           console.log('[connect] Attempting direct WalletConnect connection...')
           const wc = pickWalletConnect();
           if (wc) {
-            await connectAsync({ connector: wc });
+            connectingRef.current = true;
+            try {
+              await connectAsync({ connector: wc });
+            } finally {
+              connectingRef.current = false;
+            }
             console.log('[connect] WalletConnect connection successful!')
             return;
           } else {
