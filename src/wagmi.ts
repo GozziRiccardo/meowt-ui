@@ -3,17 +3,26 @@ import { createConfig, http } from 'wagmi'
 import { base, baseSepolia } from 'wagmi/chains'
 import { injected, walletConnect, coinbaseWallet } from 'wagmi/connectors'
 import { fallback } from 'viem'
+import { WC_PROJECT_ID as ENV_WC_PROJECT_ID } from './lib/env'
+
+export { WC_PROJECT_ID } from './lib/env'
 
 // --- Env helpers -------------------------------------------------------------
-const VITE = import.meta.env as any
+type ViteEnv = ImportMetaEnv & {
+  readonly VITE_WALLETCONNECT_PROJECT_ID?: string
+  readonly VITE_NETWORK?: string
+  readonly VITE_BASE_RPC?: string
+  readonly VITE_BASE_SEPOLIA_RPC?: string
+  readonly VITE_ALCHEMY_KEY?: string
+}
+
+const VITE = import.meta.env as ViteEnv
 
 // WalletConnect (NO fallback – fail fast if missing)
-const _pid = VITE?.VITE_WALLETCONNECT_PROJECT_ID?.trim()
-if (!_pid) {
+if (!ENV_WC_PROJECT_ID) {
   console.error('[ENV] Missing VITE_WALLETCONNECT_PROJECT_ID')
   throw new Error('VITE_WALLETCONNECT_PROJECT_ID is required')
 }
-export const WC_PROJECT_ID = _pid
 
 // Target network: "base" | "baseSepolia"
 const TARGET_NAME = (VITE?.VITE_NETWORK || 'base') as 'base' | 'baseSepolia'
@@ -58,7 +67,7 @@ export const wagmiConfig = createConfig({
   connectors: [
     injected({ shimDisconnect: true }),
     walletConnect({
-      projectId: WC_PROJECT_ID,
+      projectId: ENV_WC_PROJECT_ID!,
       showQrModal: false, // Web3Modal will render the modal
       metadata: {
         name: 'HearMeOwT',

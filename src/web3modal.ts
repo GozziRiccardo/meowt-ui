@@ -1,40 +1,41 @@
 import { createWeb3Modal } from '@web3modal/wagmi/react'
-import { wagmiConfig, TARGET_CHAIN, WC_PROJECT_ID } from './wagmi'
+import { wagmiConfig, TARGET_CHAIN } from './wagmi'
+import { WC_PROJECT_ID, assertEnv } from './lib/env'
 
 declare global {
   interface Window {
     __w3mInit?: boolean
-    __w3mModal?: ReturnType<typeof createWeb3Modal>
   }
 }
 
-export function ensureWeb3ModalLoaded() {
-  if (typeof window === 'undefined') return
-  if (window.__w3mInit && window.__w3mModal) return window.__w3mModal
-
-  if (!WC_PROJECT_ID || WC_PROJECT_ID.trim().length < 8) {
-    console.warn('[web3modal] Skipping init: invalid WC project id')
-    return
+/**
+ * Initialize Web3Modal exactly once. Returns true if initialized (now or already),
+ * false if init is not possible (e.g., missing project id) or failed.
+ */
+export function ensureWeb3ModalLoaded(): boolean {
+  if (typeof window === 'undefined') return false
+  if (window.__w3mInit) return true
+  assertEnv()
+  if (!WC_PROJECT_ID) {
+    console.warn('[web3modal] Skipping init: missing WalletConnect project id')
+    return false
   }
-
   try {
-    const modal = createWeb3Modal({
+    createWeb3Modal({
       wagmiConfig,
       projectId: WC_PROJECT_ID,
       defaultChain: TARGET_CHAIN,
-      themeMode: 'dark',
-      enableAnalytics: false,
+      themeMode: 'dark'
     })
-
     window.__w3mInit = true
-    window.__w3mModal = modal
-    console.log('[web3modal] initialized successfully')
-    return modal
+    console.log('[web3modal] created')
+    return true
   } catch (e) {
-    console.error('[web3modal] init failed:', e)
+    console.error('[web3modal] init failed', e)
     window.__w3mInit = false
-    window.__w3mModal = undefined
+    return false
   }
 }
 
-ensureWeb3ModalLoaded()
+// Fire-and-forget init on module load; callers also guard with ensureWeb3ModalLoaded()
+void ensureWeb3ModalLoaded()

@@ -2,54 +2,51 @@ import * as React from 'react'
 import { useWeb3Modal as useWeb3ModalBase } from '@web3modal/wagmi/react'
 import { ensureWeb3ModalLoaded } from '../web3modal'
 
-let warnedMissing = false
-
 export function useSafeWeb3Modal(): ReturnType<typeof useWeb3ModalBase> {
-  const [ready, setReady] = React.useState(false)
+  // Base hook should not throw when used under WagmiProvider
+  const base = useWeb3ModalBase()
 
+  // Proactively init once on mount (idempotent)
   React.useEffect(() => {
     ensureWeb3ModalLoaded()
-    setReady(true)
   }, [])
 
-  void ready
+  // Wrap open: ensure init, retry once if needed, then push wallet list view
+  const open: ReturnType<typeof useWeb3ModalBase>['open'] = React.useCallback(
+    async (options) => {
+      const opts = (options ?? { view: 'Connect' }) as Parameters<
+        ReturnType<typeof useWeb3ModalBase>['open']
+      >[0]
 
-  const fallback = React.useMemo(() => {
-    const open: ReturnType<typeof useWeb3ModalBase>['open'] = async (options) => {
-      console.log('[web3modal] Fallback open() called with options:', options)
-
-      const modal = ensureWeb3ModalLoaded()
-      if (modal) {
-        console.log('[web3modal] Modal available after re-init, trying again')
-        await new Promise((resolve) => setTimeout(resolve, 100))
-      }
-
-      if (!warnedMissing) {
-        warnedMissing = true
-        const msg =
-          'Could not open wallet selector. Please ensure you have a wallet app installed (like MetaMask or Coinbase Wallet).'
-        console.warn('[web3modal]', msg)
+      // Ensure modal init
+      let initialized = ensureWeb3ModalLoaded()
+      try {
+        await base.open(opts)
+      } catch (e1) {
+        console.warn('[web3modal] open() failed, retrying after re-init', e1)
         if (typeof window !== 'undefined') {
-          alert(msg)
+          window.__w3mInit = false
         }
+        initialized = ensureWeb3ModalLoaded()
+        if (!initialized) throw e1
+        await base.open(opts)
       }
-      throw new Error('Web3Modal unavailable')
-    }
 
-    const close: ReturnType<typeof useWeb3ModalBase>['close'] = async () => {
-      console.log('[web3modal] Fallback close() called')
-    }
+      // Force wallet list view to show options on mobile (no injected wallet)
+      try {
+        const { RouterController } = await import('@web3modal/core')
+        RouterController.push('ConnectWallets')
+      } catch {
+        /* non-fatal */
+      }
+    },
+    [base]
+  )
 
-    return { open, close }
-  }, [])
+  const close: ReturnType<typeof useWeb3ModalBase>['close'] = base.close
 
-  try {
-    const modal = useWeb3ModalBase()
-    return modal
-  } catch (err) {
-    if (!warnedMissing) {
-      console.error('[web3modal] Hook failed, using fallback:', err)
-    }
-    return fallback
-  }
+  return React.useMemo(
+    () => ({ ...base, open, close }),
+    [base, open, close]
+  )
 }
