@@ -21,15 +21,17 @@ export function ensureWeb3ModalLoaded(): boolean {
     return false
   }
   try {
-    createWeb3Modal({
+    ;(createWeb3Modal as any)({
       wagmiConfig,
       projectId: WC_PROJECT_ID,
       defaultChain: TARGET_CHAIN,
       themeMode: 'dark',
-      // Avoid 400/403 noise from analytics/catalog endpoints when the
-      // WC Cloud project doesn't have domains configured yet.
-      // (Does not affect QR or core pairing.)
-      enableAnalytics: false
+      // Reduce noisy network calls while testing (and when domains are not yet whitelisted).
+      enableAnalytics: false,
+      // Also stop calling the wallets catalog API (prevents 403s if origins aren’t set).
+      // @ts-expect-error – option exists at runtime in current Web3Modal versions.
+      enableExplorer: false,
+      // NOTE: we intentionally removed themeVariables.zIndex to avoid TS number/string mismatch.
     })
     window.__w3mInit = true
     console.log('[web3modal] created')

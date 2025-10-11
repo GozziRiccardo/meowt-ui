@@ -68,7 +68,11 @@ export const wagmiConfig = createConfig({
     injected({ shimDisconnect: true }),
     walletConnect({
       projectId: ENV_WC_PROJECT_ID!,
-      showQrModal: false, // Web3Modal will render the modal
+      // IMPORTANT:
+      // Turn ON the WalletConnect QR/deeplink modal so that a direct
+      // programmatic connect() shows a UI even if Web3Modal’s wallet list
+      // fails to load (e.g., 403 due to missing allowed origins).
+      showQrModal: true,
       metadata: {
         name: 'HearMeOwT',
         description: 'Post, vote, and earn $MEOWT.',
