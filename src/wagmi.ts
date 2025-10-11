@@ -1,28 +1,16 @@
 // src/wagmi.ts
 import { createConfig, http } from 'wagmi'
+import type { CreateConnectorFn } from 'wagmi'
 import { base, baseSepolia } from 'wagmi/chains'
-import { injected, walletConnect, coinbaseWallet } from 'wagmi/connectors'
+import { coinbaseWallet, injected, walletConnect } from 'wagmi/connectors'
 import { fallback } from 'viem'
-import { WC_PROJECT_ID } from './lib/env'
-
-export { WC_PROJECT_ID } from './lib/env'
 
 // --- Env helpers -------------------------------------------------------------
-type ViteEnv = ImportMetaEnv & {
-  readonly VITE_WALLETCONNECT_PROJECT_ID?: string
-  readonly VITE_NETWORK?: string
-  readonly VITE_BASE_RPC?: string
-  readonly VITE_BASE_SEPOLIA_RPC?: string
-  readonly VITE_ALCHEMY_KEY?: string
-}
+const VITE = import.meta.env as any
 
-const VITE = import.meta.env as ViteEnv
-
-// WalletConnect (NO fallback – fail fast if missing)
-if (!WC_PROJECT_ID) {
-  console.error('[ENV] Missing VITE_WALLETCONNECT_PROJECT_ID')
-  throw new Error('VITE_WALLETCONNECT_PROJECT_ID is required')
-}
+// WalletConnect - make it optional, app should work without it
+const _pid = VITE?.VITE_WALLETCONNECT_PROJECT_ID?.trim()
+export const WC_PROJECT_ID = _pid || undefined
 
 // Target network: "base" | "baseSepolia"
 const TARGET_NAME = (VITE?.VITE_NETWORK || 'base') as 'base' | 'baseSepolia'
@@ -38,7 +26,7 @@ const ALCHEMY_SEPOLIA_HTTP =
 // Small helper to build a resilient HTTP transport
 function resilientHttp(url: string) {
   return http(url, {
-    batch: { wait: 20 }, // coalesce JSON-RPC calls
+    batch: { wait: 20 },
     retryCount: 5,
     retryDelay: 250,
     timeout: 12_000,
@@ -59,34 +47,56 @@ const transports = {
   [baseSepolia.id]: buildBaseHttpFallback('sepolia'),
 } as const
 
+// Build connectors list
+const connectorsList: CreateConnectorFn[] = [
+  injected({
+    shimDisconnect: true,
+    target: 'metaMask',
+  }),
+  coinbaseWallet({
+    appName: 'HearMeOwT',
+    preference: 'all',
+    chainId: TARGET_CHAIN.id,
+  }),
+]
+
+// Only add WalletConnect if we have a project ID
+if (WC_PROJECT_ID && WC_PROJECT_ID.length > 8) {
+  console.log(
+    '[wagmi] WalletConnect enabled with project ID:',
+    `${WC_PROJECT_ID.slice(0, 4)}...${WC_PROJECT_ID.slice(-4)}`
+  )
+  connectorsList.push(
+    walletConnect({
+      projectId: WC_PROJECT_ID,
+      showQrModal: true,
+      qrModalOptions: {
+        themeMode: 'dark',
+        themeVariables: {
+          '--wcm-z-index': '9999',
+        },
+      },
+      metadata: {
+        name: 'HearMeOwT',
+        description: 'Post, vote, and earn $MEOWT.',
+        url:
+          typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.app',
+        icons: [
+          typeof window !== 'undefined'
+            ? new URL('/brand/logo-meowt.png', window.location.origin).toString()
+            : 'https://hearmeowt.app/brand/logo-meowt.png',
+        ],
+      },
+    })
+  )
+} else {
+  console.warn('[wagmi] WalletConnect disabled: no valid project ID')
+}
+
 // --- wagmi config ------------------------------------------------------------
 export const wagmiConfig = createConfig({
   chains: [TARGET_CHAIN],
   transports,
-
-  connectors: [
-    injected({ shimDisconnect: true }),
-    walletConnect({
-      projectId: WC_PROJECT_ID!,
-      showQrModal: true, // ← always show WalletConnect’s own modal (reliable)
-      metadata: {
-        name: 'HearMeOwT',
-        description: 'Post, vote, and earn $MEOWT.',
-        url: typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.xyz',
-        icons: [
-          typeof window !== 'undefined'
-            ? new URL('/brand/logo-meowt.png', window.location.origin).toString()
-            : 'https://hearmeowt.xyz/brand/logo-meowt.png',
-        ],
-      },
-    }),
-    coinbaseWallet({
-      appName: 'HearMeOwT',
-      preference: 'all',
-      chainId: TARGET_CHAIN.id,
-    }),
-  ],
-
+  connectors: connectorsList,
   multiInjectedProviderDiscovery: true,
-  // pollingInterval: 1500, // optional if you want faster block polling
 })

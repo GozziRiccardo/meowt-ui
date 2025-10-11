@@ -1,12 +1,12 @@
-import { createElement } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect } from 'react'
 
 /**
- * Ensures the Web3Modal custom element is present in the DOM so that
- * imperative `useWeb3Modal().open()` calls actually display the modal.
+ * Web3Modal has been removed in favour of native WalletConnect and custom pickers.
+ * Keep this component as a harmless stub so existing imports do not break.
  */
 export default function Web3ModalHost() {
-  if (typeof document === 'undefined') return null
-
-  return createPortal(createElement('w3m-modal'), document.body)
+  useEffect(() => {
+    console.log('[Web3ModalHost] Stub mounted - no Web3Modal element required')
+  }, [])
+  return null
 }

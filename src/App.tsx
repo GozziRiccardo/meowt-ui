@@ -30,7 +30,6 @@ import {
 } from "@tanstack/react-query";
 import { keccak256, toBytes, parseUnits } from "viem";
 import { useSafeWeb3Modal } from "./lib/useSafeWeb3Modal";
-import { ensureWeb3ModalLoaded } from "./web3modal";
 import { watchAccount, watchChainId } from "wagmi/actions";
 
 // at the top of App.tsx
@@ -2761,161 +2760,146 @@ function AddMeowtButtonInner() {
   );
 }
 function ConnectControls() {
-  const { open } = useSafeWeb3Modal();
   const { status, address } = useAccount();
-  const connectingRef = React.useRef(false);
   const { disconnect } = useDisconnect();
   const { connectAsync, connectors } = useConnect();
+  const [connecting, setConnecting] = React.useState(false);
+  const [showPicker, setShowPicker] = React.useState(false);
+
   const connected = status === "connected" && !!address;
   const short = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
-  // helpers to pick injected / walletconnect connectors from wagmi
-  const pickInjected = React.useCallback(() => {
-    const list = connectors || [];
-    const injected =
-      list.find((c) => c.id === "injected") ||
-      list.find((c) => c.id?.toLowerCase?.().includes("meta")) ||
-      list.find((c) => c.name?.toLowerCase?.().includes("metamask")) ||
-      list.find((c) => c.name?.toLowerCase?.().includes("injected"));
-    return injected && (injected as any).ready === false ? undefined : injected;
-  }, [connectors]);
-  const hasBrowserWallet = React.useMemo(() => {
-    if (typeof window === "undefined") return false;
-    const eth = (window as any)?.ethereum;
-    if (!eth) return false;
-    if (Array.isArray(eth.providers)) {
-      return eth.providers.some((provider: any) => typeof provider?.request === "function");
-    }
-    return typeof eth.request === "function";
-  }, []);
-  const pickWalletConnect = React.useCallback(() => {
-    const list = connectors || [];
-    return (
-      list.find((c) => c.id === "walletConnect") ||
-      list.find((c) => c.name?.toLowerCase?.().includes("walletconnect"))
-    );
-  }, [connectors]);
+
+  // Get available connectors
+  const injectedConnector = React.useMemo(
+    () => connectors.find((c) => c.id === "injected" || c.type === "injected"),
+    [connectors]
+  );
+
+  const walletConnectConnector = React.useMemo(
+    () => connectors.find((c) => c.id === "walletConnect"),
+    [connectors]
+  );
+
+  const coinbaseConnector = React.useMemo(
+    () => connectors.find((c) => c.id === "coinbaseWalletSDK"),
+    [connectors]
+  );
 
   const handleConnect = React.useCallback(
-    async (event?: React.MouseEvent<HTMLButtonElement>) => {
-      event?.preventDefault();
+    async (connector: any) => {
+      if (!connector || connecting) return;
 
-      if (connectingRef.current) {
-        console.log('[connect] Already connecting; ignoring click');
-        return;
-      }
-      connectingRef.current = true;
-      const done = () => {
-        connectingRef.current = false;
-      };
-
-      console.log('[connect] Starting connection flow…');
-
+      setConnecting(true);
       try {
-        const injected = hasBrowserWallet ? pickInjected() : undefined;
-        if (injected) {
-          console.log('[connect] Found injected connector, attempting connection…');
-          try {
-            await connectAsync({ connector: injected });
-          } catch (injErr: any) {
-            const code = (injErr && (injErr.code ?? injErr?.cause?.code)) || 0;
-            const msg = String(injErr?.message || injErr);
-            if (code === 4001 || /user rejected/i.test(msg)) {
-              try {
-                await (injected as any)?.disconnect?.();
-              } catch {}
-            }
-            throw injErr;
-          }
-          console.log('[connect] Injected connection successful!');
-          return done();
-        } else {
-          console.log('[connect] No injected connector found');
-        }
-      } catch (injErr) {
-        console.warn('[connect] Injected connector failed:', injErr);
+        console.log('[connect] Connecting with:', connector.name);
+        await connectAsync({ connector });
+        setShowPicker(false);
+        console.log('[connect] Connected successfully');
+      } catch (error) {
+        console.error('[connect] Connection failed:', error);
+        alert(`Connection failed: ${error instanceof Error ? error.message : 'Please try again'}`);
+      } finally {
+        setConnecting(false);
       }
-
-      // If there is no injected wallet available, prefer showing Web3Modal's
-      // wallet list directly so users can pick WalletConnect, Coinbase, etc.
-      if (!hasBrowserWallet) {
-        try {
-          console.log('[connect] No browser wallet detected; opening Web3Modal wallet list…');
-          ensureWeb3ModalLoaded();
-          await new Promise((resolve) => setTimeout(resolve, 150));
-          await open({ view: "ConnectWallets" } as any);
-          console.log('[connect] Web3Modal wallet list opened');
-          return done();
-        } catch (modalErr) {
-          console.error('[connect] Web3Modal wallet list failed to open:', modalErr);
-        }
-      }
-
-      // 2) DIRECT WalletConnect (WC UIKit modal; no Web3Modal Explorer dependency)
-      try {
-        const wc = pickWalletConnect();
-        if (wc) {
-          console.log('[connect] Opening WalletConnect modal…');
-          await connectAsync({ connector: wc });
-          console.log('[connect] WalletConnect connection successful!');
-          return done();
-        } else {
-          console.log('[connect] No WalletConnect connector found');
-        }
-      } catch (wcErr) {
-        console.error('[connect] WalletConnect connector failed:', wcErr);
-      }
-
-      // 3) LAST RESORT: Web3Modal UI (kept for account panel or if it does render)
-      try {
-        console.log('[connect] Ensuring Web3Modal is loaded…');
-        ensureWeb3ModalLoaded();
-        await new Promise((resolve) => setTimeout(resolve, 150));
-        console.log('[connect] Opening Web3Modal…');
-        await open({ view: "Connect" } as any);
-        console.log('[connect] Web3Modal opened successfully');
-        return done();
-      } catch (modalErr) {
-        console.error('[connect] Web3Modal failed to open:', modalErr);
-      }
-
-      try {
-        const eth = (window as any)?.ethereum;
-        if (eth?.request) {
-          console.log('[connect] Attempting eth_requestAccounts…');
-          await eth.request({ method: "eth_requestAccounts" });
-          console.log('[connect] eth_requestAccounts successful!');
-          return done();
-        }
-      } catch (rawErr) {
-        console.error('[connect] eth_requestAccounts failed:', rawErr);
-      }
-
-      console.error('[connect] All connection methods failed');
-      alert(
-        "Could not connect to a wallet. Please:\n\n" +
-          "• Install a wallet app (MetaMask, Coinbase Wallet, etc.)\n" +
-          "• Make sure your wallet app is up to date\n" +
-          "• Try refreshing the page\n\n" +
-          "If the problem persists, try opening this site directly in your wallet's browser."
-      );
-      done();
     },
-    [open, connectAsync, pickInjected, pickWalletConnect, hasBrowserWallet]
+    [connectAsync, connecting]
   );
+
+  // Auto-connect to injected if available and user clicks connect
+  const handleQuickConnect = React.useCallback(async () => {
+    if (injectedConnector) {
+      await handleConnect(injectedConnector);
+    } else {
+      setShowPicker(true);
+    }
+  }, [injectedConnector, handleConnect]);
+
   return (
     <div className="flex items-center gap-2">
       {!connected ? (
-        <button
-          onClick={handleConnect}
-          className="px-3 py-1.5 rounded-md font-medium bg-rose-600 text-white hover:bg-rose-700 border border-transparent"
-        >
-          Connect Wallet
-        </button>
+        <>
+          <button
+            onClick={handleQuickConnect}
+            disabled={connecting}
+            className="px-3 py-1.5 rounded-md font-medium bg-rose-600 text-white hover:bg-rose-700 border border-transparent disabled:opacity-50"
+          >
+            {connecting ? 'Connecting...' : 'Connect Wallet'}
+          </button>
+
+          {/* Wallet picker modal */}
+          {showPicker && (
+            <div
+              className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4"
+              onClick={() => setShowPicker(false)}
+            >
+              <div
+                className="bg-white dark:bg-neutral-800 rounded-2xl p-6 max-w-sm w-full shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold">Connect Wallet</h3>
+                  <button
+                    onClick={() => setShowPicker(false)}
+                    className="text-2xl leading-none opacity-60 hover:opacity-100"
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {injectedConnector && (
+                    <button
+                      onClick={() => handleConnect(injectedConnector)}
+                      disabled={connecting}
+                      className="w-full px-4 py-3 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-700 flex items-center gap-3 transition disabled:opacity-50"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-white font-bold">
+                        🦊
+                      </div>
+                      <span className="font-medium">Browser Wallet</span>
+                    </button>
+                  )}
+
+                  {walletConnectConnector && (
+                    <button
+                      onClick={() => handleConnect(walletConnectConnector)}
+                      disabled={connecting}
+                      className="w-full px-4 py-3 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-700 flex items-center gap-3 transition disabled:opacity-50"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold">
+                        🔗
+                      </div>
+                      <span className="font-medium">WalletConnect</span>
+                    </button>
+                  )}
+
+                  {coinbaseConnector && (
+                    <button
+                      onClick={() => handleConnect(coinbaseConnector)}
+                      disabled={connecting}
+                      className="w-full px-4 py-3 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-700 flex items-center gap-3 transition disabled:opacity-50"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold">
+                        CB
+                      </div>
+                      <span className="font-medium">Coinbase Wallet</span>
+                    </button>
+                  )}
+
+                  {!injectedConnector && !walletConnectConnector && !coinbaseConnector && (
+                    <p className="text-sm text-center opacity-60 py-4">
+                      No wallet connectors available. Please install a wallet extension.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </>
       ) : (
         <>
           <button
-            onClick={() => open({ view: "Account" } as any)}
-            title="Open wallet account panel"
+            onClick={() => setShowPicker(true)}
             className="px-3 py-1.5 rounded-md font-medium border border-rose-300/50 bg-rose-50 hover:bg-rose-100 dark:border-rose-300/30 dark:bg-rose-900/30 dark:hover:bg-rose-900/40 text-rose-900 dark:text-rose-100"
           >
             {short}
