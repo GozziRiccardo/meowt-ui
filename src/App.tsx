@@ -2767,7 +2767,7 @@ function ConnectControls() {
   const { connectAsync, connectors } = useConnect();
   const connected = status === "connected" && !!address;
   const short = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
-  // Prefer a ready injected connector if present (MetaMask/Rabby/CBW extension)
+  // helpers to pick injected / walletconnect connectors from wagmi
   const pickInjected = React.useCallback(() => {
     const list = connectors || [];
     const injected =
@@ -2775,14 +2775,20 @@ function ConnectControls() {
       list.find((c) => c.id?.toLowerCase?.().includes("meta")) ||
       list.find((c) => c.name?.toLowerCase?.().includes("metamask")) ||
       list.find((c) => c.name?.toLowerCase?.().includes("injected"));
-    if (injected && (injected as any).ready !== false) return injected;
-    return undefined;
+    return injected && (injected as any).ready === false ? undefined : injected;
+  }, [connectors]);
+  const pickWalletConnect = React.useCallback(() => {
+    const list = connectors || [];
+    return (
+      list.find((c) => c.id === "walletConnect") ||
+      list.find((c) => c.name?.toLowerCase?.().includes("walletconnect"))
+    );
   }, [connectors]);
 
   const handleConnect = React.useCallback(
     async (event?: React.MouseEvent<HTMLButtonElement>) => {
       event?.preventDefault();
-      // 1) Try injected connector first
+      // 0) If an injected connector is available, prefer it.
       try {
         const injected = pickInjected();
         if (injected) {
@@ -2793,24 +2799,47 @@ function ConnectControls() {
         console.warn("[connect] Injected connector failed, continuing to modal", injErr);
       }
 
-      // 2) Open Web3Modal (which will handle WalletConnect and deep links on mobile)
-      let modalTried = false;
+      // 1) Try Web3Modal (force wallet list view when possible)
+      let modalFailed = false;
       try {
         ensureWeb3ModalLoaded();
         await open({ view: "Connect" } as any);
+        try {
+          const { RouterController } = await import("@web3modal/core");
+          // This ensures the wallet list opens directly
+          RouterController.push("ConnectWallets");
+        } catch (routerErr) {
+          // not fatal; modal still opened
+          console.debug("[connect] RouterController not available", routerErr);
+        }
         return;
       } catch (modalErr1) {
         console.error("[connect] Web3Modal open failed (first attempt)", modalErr1);
-        modalTried = true;
+        modalFailed = true;
         // Retry once in case init failed earlier; re-init and try open again.
         try {
           (window as any).__w3mInit = false;
           ensureWeb3ModalLoaded();
           await open({ view: "Connect" } as any);
+          try {
+            const { RouterController } = await import("@web3modal/core");
+            RouterController.push("ConnectWallets");
+          } catch {}
           return;
         } catch (modalErr2) {
           console.error("[connect] Web3Modal open failed (retry)", modalErr2);
         }
+      }
+
+      // 2) If modal didn’t appear, try WalletConnect programmatically (deep-links on mobile)
+      try {
+        const wc = pickWalletConnect();
+        if (wc) {
+          await connectAsync({ connector: wc });
+          return;
+        }
+      } catch (wcErr) {
+        console.error("[connect] WalletConnect connector failed", wcErr);
       }
 
       // 3) Last-ditch: if a provider exists, try raw request (helps some mobile browsers)
@@ -2825,12 +2854,12 @@ function ConnectControls() {
       }
 
       alert(
-        modalTried
+        modalFailed
           ? "Couldn’t open the wallet picker. If you have a wallet app (e.g. MetaMask), open it once, then come back and try again."
           : "No browser wallet detected. Please pick a wallet from the connection modal."
       );
     },
-    [open, pickInjected, connectAsync]
+    [open, connectAsync, pickInjected, pickWalletConnect]
   );
   return (
     <div className="flex items-center gap-2">
