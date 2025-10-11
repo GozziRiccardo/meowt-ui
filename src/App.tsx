@@ -2785,6 +2785,14 @@ function ConnectControls() {
     [connectors]
   );
 
+  const injectedReady = Boolean(injectedConnector?.ready);
+
+  const isMobileDevice = React.useMemo(() => {
+    if (typeof navigator === "undefined") return false;
+    const ua = navigator.userAgent || "";
+    return /android|iphone|ipad|ipod/i.test(ua);
+  }, []);
+
   const handleConnect = React.useCallback(
     async (connector: any) => {
       if (!connector || connecting) return;
@@ -2807,12 +2815,23 @@ function ConnectControls() {
 
   // Auto-connect to injected if available and user clicks connect
   const handleQuickConnect = React.useCallback(async () => {
-    if (injectedConnector) {
+    if (injectedConnector && injectedReady) {
       await handleConnect(injectedConnector);
-    } else {
-      setShowPicker(true);
+      return;
     }
-  }, [injectedConnector, handleConnect]);
+
+    if (isMobileDevice && walletConnectConnector) {
+      await handleConnect(walletConnectConnector);
+      return;
+    }
+
+    if (!injectedConnector && !walletConnectConnector && !coinbaseConnector) {
+      alert("No wallet connectors available. Please install a wallet.");
+      return;
+    }
+
+    setShowPicker(true);
+  }, [coinbaseConnector, handleConnect, injectedConnector, injectedReady, isMobileDevice, walletConnectConnector]);
 
   return (
     <div className="flex items-center gap-2">
@@ -2850,13 +2869,15 @@ function ConnectControls() {
                   {injectedConnector && (
                     <button
                       onClick={() => handleConnect(injectedConnector)}
-                      disabled={connecting}
+                      disabled={connecting || !injectedReady}
                       className="w-full px-4 py-3 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-700 flex items-center gap-3 transition disabled:opacity-50"
                     >
                       <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-white font-bold">
                         🦊
                       </div>
-                      <span className="font-medium">Browser Wallet</span>
+                      <span className="font-medium">
+                        {injectedReady ? "Browser Wallet" : "Browser Wallet (not detected)"}
+                      </span>
                     </button>
                   )}
 
