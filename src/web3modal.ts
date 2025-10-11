@@ -37,8 +37,8 @@ export function ensureWeb3ModalLoaded(): boolean {
       mobileWallets: [
         { id: 'metamask' },
         { id: 'coinbaseWallet' },
-        { id: 'rainbow' },
         { id: 'trust' },
+        { id: 'rainbow' },
       ],
       desktopWallets: [{ id: 'metamask' }, { id: 'rabby' }, { id: 'coinbaseWallet' }],
     }
