@@ -29,7 +29,6 @@ export function ensureWeb3ModalLoaded(): boolean {
       // Reduce noisy network calls while testing (and when domains are not yet whitelisted).
       enableAnalytics: false,
       // Also stop calling the wallets catalog API (prevents 403s if origins aren’t set).
-      // @ts-expect-error – option exists at runtime in current Web3Modal versions.
       enableExplorer: false,
       // NOTE: we intentionally removed themeVariables.zIndex to avoid TS number/string mismatch.
     })
