@@ -1,7 +1,7 @@
 // src/web3modal.ts
 import { createWeb3Modal } from '@web3modal/wagmi/react'
-import { wagmiConfig, TARGET_CHAIN } from './wagmi'
-import { WC_PROJECT_ID, assertEnv } from './lib/env'
+import { wagmiConfig, TARGET_CHAIN, WC_PROJECT_ID } from './wagmi'
+// Use the SAME project id that wagmi.ts validated, to avoid mismatches
 
 declare global {
   interface Window {
@@ -12,18 +12,26 @@ declare global {
 export function ensureWeb3ModalLoaded() {
   if (typeof window === 'undefined') return
   if (window.__w3mInit) return
-  assertEnv()
-  if (!WC_PROJECT_ID) return
+  if (!WC_PROJECT_ID) {
+    console.warn('[web3modal] Skipping init: missing WC project id')
+    return
+  }
 
   window.__w3mInit = true
-  createWeb3Modal({
-    wagmiConfig,
-    projectId: WC_PROJECT_ID,
-    defaultChain: TARGET_CHAIN,
-    themeMode: 'dark',
-    // NOTE: we intentionally removed themeVariables.zIndex to avoid TS number/string mismatch.
-  })
-  console.log('[web3modal] created')
+  try {
+    createWeb3Modal({
+      wagmiConfig,
+      projectId: WC_PROJECT_ID,
+      defaultChain: TARGET_CHAIN,
+      themeMode: 'dark',
+      // keep styling basic; modal handles deep links on mobile
+    })
+    console.log('[web3modal] created')
+  } catch (e) {
+    // If something throws, clear the flag so a later call may retry.
+    console.error('[web3modal] init failed', e)
+    window.__w3mInit = false
+  }
 }
 
 ensureWeb3ModalLoaded()
