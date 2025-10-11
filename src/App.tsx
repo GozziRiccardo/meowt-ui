@@ -2819,69 +2819,35 @@ function ConnectControls() {
         console.warn('[connect] Injected connector failed:', injErr);
       }
 
-      console.log('[connect] Ensuring Web3Modal is loaded...')
-      ensureWeb3ModalLoaded();
-
-      await new Promise((resolve) => setTimeout(resolve, 150));
-
-      let modalOpened = false;
+      // Primary fallback: open WalletConnect’s OWN QR/deeplink modal (since we set showQrModal: true).
       try {
-        console.log('[connect] Attempting to open Web3Modal...')
-        await open({ view: "Connect" } as any);
-        modalOpened = true;
-        console.log('[connect] Web3Modal opened successfully')
-
-        try {
-          const { RouterController } = await import("@web3modal/core");
-          RouterController.push("ConnectWallets");
-        } catch (routerErr) {
-          console.debug('[connect] RouterController unavailable (non-critical):', routerErr);
-        }
-        // IMPORTANT:
-        // Even if the wallet catalog API 403s, we can still start a WalletConnect
-        // pairing to force the QR / deep-link UI to render. Do it right after opening.
-        try {
-          const wc = pickWalletConnect();
-          if (wc) {
-            console.log('[connect] Starting WalletConnect pairing…')
-            connectingRef.current = true;
-            try {
-              await connectAsync({ connector: wc });
-              console.log('[connect] WalletConnect pairing started')
-              return;
-            } finally {
-              connectingRef.current = false;
-            }
-          } else {
-            console.log('[connect] No WalletConnect connector found after opening modal')
+        const wc = pickWalletConnect();
+        if (wc) {
+          console.log('[connect] Opening WalletConnect QR/deeplink modal…')
+          connectingRef.current = true;
+          try {
+            await connectAsync({ connector: wc });
+            console.log('[connect] WalletConnect session established')
+            return;
+          } finally {
+            connectingRef.current = false;
           }
-        } catch (wcStartErr) {
-          // Non-fatal: keep modal open so user can choose manually if list loads.
-          console.warn('[connect] WalletConnect pairing failed to start:', wcStartErr);
+        } else {
+          console.log('[connect] No WalletConnect connector found')
         }
-      } catch (modalErr) {
-        console.error('[connect] Web3Modal failed to open:', modalErr);
+      } catch (wcErr) {
+        console.error('[connect] WalletConnect connector failed:', wcErr);
       }
 
-      if (!modalOpened) {
-        try {
-          console.log('[connect] Attempting direct WalletConnect connection...')
-          const wc = pickWalletConnect();
-          if (wc) {
-            connectingRef.current = true;
-            try {
-              await connectAsync({ connector: wc });
-            } finally {
-              connectingRef.current = false;
-            }
-            console.log('[connect] WalletConnect connection successful!')
-            return;
-          } else {
-            console.log('[connect] No WalletConnect connector found')
-          }
-        } catch (wcErr) {
-          console.error('[connect] WalletConnect connector failed:', wcErr);
-        }
+      // Secondary fallback: open Web3Modal (will still work for installed wallets or deep-link routes).
+      try {
+        console.log('[connect] Ensuring Web3Modal is loaded...')
+        ensureWeb3ModalLoaded();
+        await open({ view: "Connect" } as any);
+        console.log('[connect] Web3Modal opened')
+        return;
+      } catch (modalErr) {
+        console.error('[connect] Web3Modal failed to open:', modalErr);
       }
 
       try {
