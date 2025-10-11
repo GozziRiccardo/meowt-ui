@@ -2835,6 +2835,21 @@ function ConnectControls() {
         console.warn('[connect] Injected connector failed:', injErr);
       }
 
+      // If there is no injected wallet available, prefer showing Web3Modal's
+      // wallet list directly so users can pick WalletConnect, Coinbase, etc.
+      if (!hasBrowserWallet) {
+        try {
+          console.log('[connect] No browser wallet detected; opening Web3Modal wallet list…');
+          ensureWeb3ModalLoaded();
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          await open({ view: "ConnectWallets" } as any);
+          console.log('[connect] Web3Modal wallet list opened');
+          return done();
+        } catch (modalErr) {
+          console.error('[connect] Web3Modal wallet list failed to open:', modalErr);
+        }
+      }
+
       // 2) DIRECT WalletConnect (WC UIKit modal; no Web3Modal Explorer dependency)
       try {
         const wc = pickWalletConnect();
