@@ -26,11 +26,13 @@ export function ensureWeb3ModalLoaded(): boolean {
       projectId: WC_PROJECT_ID,
       defaultChain: TARGET_CHAIN,
       themeMode: 'dark',
-      // Reduce noisy network calls while testing (and when domains are not yet whitelisted).
+      // Force on-top so app overlays can’t hide it.
+      themeVariables: { zIndex: '2147483647' },
+      // Keep noise down; this only disables telemetry.
       enableAnalytics: false,
-      // Also stop calling the wallets catalog API (prevents 403s if origins aren’t set).
-      enableExplorer: false,
-      // NOTE: we intentionally removed themeVariables.zIndex to avoid TS number/string mismatch.
+      // IMPORTANT: leave Explorer enabled so the wallet list renders
+      // once your origins are allow-listed in WalletConnect Cloud.
+      enableExplorer: true,
     })
     window.__w3mInit = true
     console.log('[web3modal] created')
