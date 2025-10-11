@@ -2777,6 +2777,15 @@ function ConnectControls() {
       list.find((c) => c.name?.toLowerCase?.().includes("injected"));
     return injected && (injected as any).ready === false ? undefined : injected;
   }, [connectors]);
+  const hasBrowserWallet = React.useMemo(() => {
+    if (typeof window === "undefined") return false;
+    const eth = (window as any)?.ethereum;
+    if (!eth) return false;
+    if (Array.isArray(eth.providers)) {
+      return eth.providers.some((provider: any) => typeof provider?.request === "function");
+    }
+    return typeof eth.request === "function";
+  }, []);
   const pickWalletConnect = React.useCallback(() => {
     const list = connectors || [];
     return (
@@ -2792,7 +2801,7 @@ function ConnectControls() {
       console.log('[connect] Starting connection flow...')
 
       try {
-        const injected = pickInjected();
+        const injected = hasBrowserWallet ? pickInjected() : undefined;
         if (injected) {
           console.log('[connect] Found injected connector, attempting connection...')
           await connectAsync({ connector: injected });
@@ -2865,7 +2874,7 @@ function ConnectControls() {
           "If the problem persists, try opening this site directly in your wallet's browser."
       );
     },
-    [open, connectAsync, pickInjected, pickWalletConnect]
+    [open, connectAsync, pickInjected, pickWalletConnect, hasBrowserWallet]
   );
   return (
     <div className="flex items-center gap-2">
