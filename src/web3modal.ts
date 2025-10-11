@@ -1,7 +1,7 @@
 // src/web3modal.ts
 import { createWeb3Modal } from '@web3modal/wagmi/react'
 import { wagmiConfig, TARGET_CHAIN, WC_PROJECT_ID } from './wagmi'
-// Use the SAME project id that wagmi.ts validated, to avoid mismatches
+// IMPORTANT: use the SAME project id as wagmi.ts to avoid mismatches.
 
 declare global {
   interface Window {
@@ -24,7 +24,6 @@ export function ensureWeb3ModalLoaded() {
       projectId: WC_PROJECT_ID,
       defaultChain: TARGET_CHAIN,
       themeMode: 'dark',
-      // keep styling basic; modal handles deep links on mobile
     })
     console.log('[web3modal] created')
   } catch (e) {
