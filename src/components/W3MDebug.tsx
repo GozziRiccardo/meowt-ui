@@ -5,7 +5,7 @@ export default function W3MDebug() {
   const { open } = useSafeWeb3Modal()
   useEffect(() => {
     ;(window as any).openW3M = () => open().catch(console.error)
-    console.log('[W3MDebug] window.openW3M available')
+    console.log('[W3MDebug] window.openW3M available (stub)')
   }, [open])
   return null
 }
