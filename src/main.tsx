@@ -21,6 +21,7 @@ import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import App from './App'
 import Landing from './Landing'
+import Web3ModalHost from './components/Web3ModalHost'
 
 const router = createBrowserRouter([
   { path: '/', element: <Landing /> },
@@ -30,5 +31,6 @@ const router = createBrowserRouter([
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <RouterProvider router={router} />
+    <Web3ModalHost />
   </React.StrictMode>
 )
