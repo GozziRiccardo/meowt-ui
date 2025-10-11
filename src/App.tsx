@@ -2770,13 +2770,24 @@ function ConnectControls() {
       try {
         await open({ view: "Connect" } as any);
       } catch (err) {
-        console.error("[connect] Web3Modal failed, trying direct injected connect", err);
+        console.error("[connect] Web3Modal failed, trying fallback options", err);
         const ethereum = (window as any)?.ethereum;
-        if (ethereum?.request) {
+        const hasInjected =
+          !!ethereum?.request || Array.isArray(ethereum?.providers) || Array.isArray((window as any)?.ethereumProviders);
+
+        if (hasInjected && ethereum?.request) {
           await ethereum.request({ method: "eth_requestAccounts" });
-        } else {
-          alert("No injected wallet found and Web3Modal failed to open.");
+          return;
         }
+
+        try {
+          await open({ view: "ConnectWallets" } as any);
+          return;
+        } catch (wcErr) {
+          console.error("[connect] WalletConnect menu fallback failed", wcErr);
+        }
+
+        alert("Unable to open a wallet connection option. Please try again.");
       }
     },
     [open]
