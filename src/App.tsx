@@ -19,6 +19,7 @@ import {
   useWriteContract,
   usePublicClient,
   useWalletClient,
+  useConnect,
   useBlockNumber,
 } from "wagmi";
 import { wagmiConfig, TARGET_CHAIN } from "./wagmi";
@@ -2763,46 +2764,58 @@ function ConnectControls() {
   const { open } = useSafeWeb3Modal();
   const { status, address } = useAccount();
   const { disconnect } = useDisconnect();
+  const { connectAsync, connectors } = useConnect();
   const connected = status === "connected" && !!address;
   const short = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
-  const openWalletConnectMenu = React.useCallback(async () => {
-    await open({ view: "Connect" } as any);
-    try {
-      const { RouterController } = await import("@web3modal/core");
-      RouterController.push("ConnectWallets");
-    } catch (routerErr) {
-      console.warn("[connect] Unable to force WalletConnect view", routerErr);
-    }
-  }, [open]);
+  const pickInjected = React.useCallback(() => {
+    const list = connectors || [];
+    const injected =
+      list.find((c) => c.id === "injected") ||
+      list.find((c) => c.id?.toLowerCase?.().includes("meta")) ||
+      list.find((c) => c.name?.toLowerCase?.().includes("metamask")) ||
+      list.find((c) => c.name?.toLowerCase?.().includes("injected"));
+    if (injected && (injected as any).ready !== false) return injected;
+    return undefined;
+  }, [connectors]);
   const handleConnect = React.useCallback(
     async (event?: React.MouseEvent<HTMLButtonElement>) => {
       event?.preventDefault();
       ensureWeb3ModalLoaded();
       try {
-        await open({ view: "Connect" } as any);
-        return;
-      } catch (err) {
-        console.error("[connect] Web3Modal failed, trying fallback options", err);
-        const ethereum = (window as any)?.ethereum;
-        const hasInjected =
-          !!ethereum?.request || Array.isArray(ethereum?.providers) || Array.isArray((window as any)?.ethereumProviders);
-
-        if (hasInjected && ethereum?.request) {
-          await ethereum.request({ method: "eth_requestAccounts" });
-          return;
+        const injected = pickInjected();
+        if (injected) {
+          try {
+            await connectAsync({ connector: injected });
+            return;
+          } catch (injErr) {
+            console.warn("[connect] Injected connector failed, falling back to modal", injErr);
+          }
         }
 
         try {
-          await openWalletConnectMenu();
+          await open({ view: "Connect" } as any);
           return;
-        } catch (wcErr) {
-          console.error("[connect] WalletConnect menu fallback failed", wcErr);
+        } catch (modalErr) {
+          console.error("[connect] Web3Modal open failed", modalErr);
+          const eth = (window as any)?.ethereum;
+          if (eth?.request) {
+            try {
+              await eth.request({ method: "eth_requestAccounts" });
+              return;
+            } catch (rawErr) {
+              console.error("[connect] eth_requestAccounts failed", rawErr);
+            }
+          }
+          alert(
+            "Unable to open a wallet connection option. If you use a browser wallet, unlock it and try again — otherwise pick a wallet from the Web3Modal picker."
+          );
         }
-
-        alert("Unable to open a wallet connection option. Please try again.");
+      } catch (err) {
+        console.error("[connect] Unexpected error in handleConnect", err);
+        alert("Could not start a wallet connection. Please try again.");
       }
     },
-    [open, openWalletConnectMenu]
+    [open, pickInjected, connectAsync]
   );
   return (
     <div className="flex items-center gap-2">
