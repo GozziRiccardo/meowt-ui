@@ -591,7 +591,10 @@ function two(x?: number) { return typeof x === "number" && Number.isFinite(x) ? 
 function PermanentTimerBar() {
   const snap = useSnap();
   // `rem` is the remaining exposure/expiration seconds returned by GameSnapshot
-  const rem = Number((snap as any)?.rem ?? 0n);
+  const remRaw = (snap as any)?.rem ?? 0n;
+  const rem = Number(remRaw);
+
+  if (!Number.isFinite(rem) || rem <= 0) return null;
 
   // Lightweight tick so the label stays fresh even between query nudges
   const [, forceTick] = React.useState(0);
@@ -612,7 +615,7 @@ function PermanentTimerBar() {
         <img
           src="/illustrations/time-mascot.png"
           alt=""
-          className="h-12 md:h-14 w-auto object-contain pointer-events-none select-none"
+          className="h-14 md:h-16 w-auto object-contain pointer-events-none select-none"
           draggable={false}
         />
         <div
@@ -1182,12 +1185,21 @@ function useGameSnapshot() {
   const startTime = Number((m?.startTime ?? m?.[3] ?? 0n) as bigint);
   const B0secs = Number((m?.B0 ?? m?.[4] ?? 0n) as bigint);
 
-  // Local ticker
-  const [nowSec, setNowSec] = React.useState(() => Math.floor(Date.now() / 1000));
-  React.useEffect(() => {
-    const iv = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 500);
-    return () => clearInterval(iv);
+  // Local ticker (anchored to chain time)
+  const chainNowRef = React.useRef<{ epoch: number; fetchedAt: number }>({ epoch: 0, fetchedAt: 0 });
+  const computeChainNow = React.useCallback(() => {
+    const anchor = chainNowRef.current;
+    if (anchor.epoch > 0 && anchor.fetchedAt > 0) {
+      const elapsed = Math.floor((Date.now() - anchor.fetchedAt) / 1000);
+      return anchor.epoch + Math.max(0, elapsed);
+    }
+    return Math.floor(Date.now() / 1000);
   }, []);
+  const [nowSec, setNowSec] = React.useState(() => computeChainNow());
+  React.useEffect(() => {
+    const iv = setInterval(() => setNowSec(computeChainNow()), 500);
+    return () => clearInterval(iv);
+  }, [computeChainNow]);
 
   // Refs and latches (mostly unchanged)
   const lastIdRef = React.useRef<bigint>(0n);
@@ -1242,6 +1254,22 @@ function useGameSnapshot() {
     const e = endTsNum > 0 ? endTsNum : startTime && B0secs ? startTime + B0secs : 0;
     if (e > 0) exposureEndRef.current = e;
   }, [endTsNum, startTime, B0secs]);
+
+  React.useEffect(() => {
+    const rem = Number(remChainBN ?? 0n);
+    if (!Number.isFinite(rem) || rem < 0) return;
+    const fallbackEnd =
+      exposureEndRef.current > 0
+        ? exposureEndRef.current
+        : startTime && B0secs
+        ? startTime + B0secs
+        : 0;
+    if (fallbackEnd <= 0) return;
+    const anchorEpoch = fallbackEnd - rem;
+    if (!Number.isFinite(anchorEpoch)) return;
+    chainNowRef.current = { epoch: anchorEpoch, fetchedAt: Date.now() };
+    setNowSec(computeChainNow());
+  }, [remChainBN, endTsNum, startTime, B0secs, computeChainNow]);
 
   // Glory window (predict + chain)
   React.useEffect(() => {
