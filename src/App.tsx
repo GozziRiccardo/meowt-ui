@@ -2759,14 +2759,32 @@ function AddMeowtButtonInner() {
     </button>
   );
 }
-function hasInjectedProvider(): boolean {
-  if (typeof window === "undefined") return false;
-  const { ethereum } = window as any;
-  if (!ethereum) return false;
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
-  const candidates: any[] = Array.isArray(ethereum?.providers)
-    ? ethereum.providers.filter(Boolean)
-    : [ethereum];
+function getInjectedProviders(): any[] {
+  if (typeof window === "undefined") return [];
+  const { ethereum } = window as any;
+  if (!ethereum) return [];
+
+  if (Array.isArray(ethereum?.providers)) {
+    return ethereum.providers.filter(Boolean);
+  }
+
+  return ethereum ? [ethereum].filter(Boolean) : [];
+}
+
+function hasMetaMaskProvider(): boolean {
+  return getInjectedProviders().some((provider) => provider?.isMetaMask);
+}
+
+function hasInjectedProvider(): boolean {
+  const candidates = getInjectedProviders();
+
+  if (!candidates.length) return false;
 
   const indicators = [
     "isMetaMask",
@@ -2811,6 +2829,7 @@ function ConnectControls() {
   const [connecting, setConnecting] = React.useState(false);
   const [showPicker, setShowPicker] = React.useState(false);
   const [injectedDetected, setInjectedDetected] = React.useState(() => hasInjectedProvider());
+  const [metaMaskDetected, setMetaMaskDetected] = React.useState(() => hasMetaMaskProvider());
 
   const connected = status === "connected" && !!address;
   const short = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
@@ -2818,6 +2837,15 @@ function ConnectControls() {
   // Get available connectors
   const injectedConnector = React.useMemo(
     () => connectors.find((c) => c.id === "injected" || c.type === "injected"),
+    [connectors]
+  );
+
+  const metaMaskConnector = React.useMemo(
+    () =>
+      connectors.find((c) => {
+        const id = typeof c.id === "string" ? c.id : "";
+        return id === "metaMask" || id === "metaMaskSDK" || c.type === "metaMask";
+      }),
     [connectors]
   );
 
@@ -2836,6 +2864,11 @@ function ConnectControls() {
     return Boolean(injectedConnector.ready) || injectedDetected;
   }, [injectedConnector, injectedDetected]);
 
+  const metaMaskReady = React.useMemo(() => {
+    if (!metaMaskConnector) return false;
+    return Boolean(metaMaskConnector.ready) || metaMaskDetected;
+  }, [metaMaskConnector, metaMaskDetected]);
+
   React.useEffect(() => {
     if (injectedConnector?.ready) {
       setInjectedDetected(true);
@@ -2843,11 +2876,18 @@ function ConnectControls() {
   }, [injectedConnector?.ready]);
 
   React.useEffect(() => {
+    if (metaMaskConnector?.ready) {
+      setMetaMaskDetected(true);
+    }
+  }, [metaMaskConnector?.ready]);
+
+  React.useEffect(() => {
     if (typeof window === "undefined") return;
     let cancelled = false;
     const update = () => {
       if (cancelled) return;
       setInjectedDetected(hasInjectedProvider());
+      setMetaMaskDetected(hasMetaMaskProvider());
     };
 
     update();
@@ -2871,39 +2911,75 @@ function ConnectControls() {
     return /android|iphone|ipad|ipod/i.test(ua);
   }, []);
 
+  React.useEffect(() => {
+    if (status !== "connecting") {
+      setConnecting(false);
+    }
+    if (status === "connected") {
+      setShowPicker(false);
+    }
+  }, [status]);
+
   const handleConnect = React.useCallback(
     async (connector: any) => {
       if (!connector || connecting) return;
 
       setConnecting(true);
+      let rejectedRetries = 0;
+      let resetRetries = 0;
       try {
         console.log('[connect] Connecting with:', connector.name);
         const params = { connector, chainId: TARGET_CHAIN.id } as const;
-        try {
-          await connectAsync(params);
-        } catch (error) {
-          const message = extractErrorMessage(error);
-          if (
-            isWalletConnectConnector(connector) &&
-            /connection request reset/i.test(message)
-          ) {
-            console.warn('[connect] WalletConnect reset detected, retrying once');
-            try {
-              await connector.disconnect?.();
-            } catch (resetError) {
-              console.warn('[connect] WalletConnect reset cleanup failed:', resetError);
-            }
+
+        const attempt = async (): Promise<void> => {
+          try {
             await connectAsync(params);
-          } else {
+          } catch (error) {
+            const message = extractErrorMessage(error);
+
+            if (
+              isWalletConnectConnector(connector) &&
+              /connection request reset/i.test(message) &&
+              resetRetries < 1
+            ) {
+              resetRetries += 1;
+              console.warn('[connect] WalletConnect reset detected, retrying once');
+              try {
+                await connector.disconnect?.();
+              } catch (resetError) {
+                console.warn('[connect] WalletConnect reset cleanup failed:', resetError);
+              }
+              return attempt();
+            }
+
+            if (
+              !isWalletConnectConnector(connector) &&
+              /user rejected/i.test(message) &&
+              rejectedRetries < 1
+            ) {
+              rejectedRetries += 1;
+              console.warn('[connect] Received "user rejected" without prompt, retrying');
+              await sleep(350);
+              return attempt();
+            }
+
             throw error;
           }
-        }
+        };
+
+        await attempt();
         setShowPicker(false);
         console.log('[connect] Connected successfully');
       } catch (error) {
         console.error('[connect] Connection failed:', error);
         const message = extractErrorMessage(error);
-        alert(`Connection failed: ${message}`);
+        let friendlyMessage = message;
+        if (/provider (?:not\s)?detected/i.test(message) || /provider not found/i.test(message)) {
+          friendlyMessage =
+            "Provider not detected. Please open your wallet extension or pick another option.";
+          setShowPicker(true);
+        }
+        alert(`Connection failed: ${friendlyMessage}`);
       } finally {
         setConnecting(false);
       }
@@ -2913,23 +2989,53 @@ function ConnectControls() {
 
   // Auto-connect to injected if available and user clicks connect
   const handleQuickConnect = React.useCallback(async () => {
+    if (isMobileDevice) {
+      if (walletConnectConnector) {
+        await handleConnect(walletConnectConnector);
+        return;
+      }
+
+      if (metaMaskConnector) {
+        await handleConnect(metaMaskConnector);
+        return;
+      }
+    }
+
+    const readyPrimaryCount =
+      (metaMaskConnector && metaMaskReady ? 1 : 0) +
+      (injectedConnector && injectedReady ? 1 : 0);
+
+    if (!isMobileDevice && readyPrimaryCount > 1) {
+      setShowPicker(true);
+      return;
+    }
+
+    if (metaMaskConnector && metaMaskReady) {
+      await handleConnect(metaMaskConnector);
+      return;
+    }
+
     if (injectedConnector && injectedReady) {
       await handleConnect(injectedConnector);
       return;
     }
 
-    if (isMobileDevice && walletConnectConnector) {
-      await handleConnect(walletConnectConnector);
-      return;
-    }
-
-    if (!injectedConnector && !walletConnectConnector && !coinbaseConnector) {
+    if (!metaMaskConnector && !injectedConnector && !walletConnectConnector && !coinbaseConnector) {
       alert("No wallet connectors available. Please install a wallet.");
       return;
     }
 
     setShowPicker(true);
-  }, [coinbaseConnector, handleConnect, injectedConnector, injectedReady, isMobileDevice, walletConnectConnector]);
+  }, [
+    coinbaseConnector,
+    handleConnect,
+    injectedConnector,
+    injectedReady,
+    isMobileDevice,
+    metaMaskConnector,
+    metaMaskReady,
+    walletConnectConnector,
+  ]);
 
   return (
     <div className="flex items-center gap-2">
@@ -2964,18 +3070,47 @@ function ConnectControls() {
                 </div>
 
                 <div className="space-y-2">
+                  {metaMaskConnector && (
+                    <button
+                      onClick={() => handleConnect(metaMaskConnector)}
+                      disabled={connecting || (!metaMaskReady && !isMobileDevice)}
+                      className="w-full px-4 py-3 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-700 flex items-center gap-3 transition disabled:opacity-50"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-white font-bold">
+                        🦊
+                      </div>
+                      <div className="flex flex-col text-left">
+                        <span className="font-medium">
+                          {metaMaskReady || isMobileDevice
+                            ? "MetaMask"
+                            : "MetaMask (not detected)"}
+                        </span>
+                        {!metaMaskReady && !isMobileDevice && (
+                          <span className="text-xs opacity-70">
+                            Open the extension first, then try again.
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  )}
+
                   {injectedConnector && (
                     <button
                       onClick={() => handleConnect(injectedConnector)}
                       disabled={connecting || !injectedReady}
                       className="w-full px-4 py-3 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-700 flex items-center gap-3 transition disabled:opacity-50"
                     >
-                      <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-white font-bold">
-                        🦊
+                      <div className="w-8 h-8 rounded-full bg-purple-500 flex items-center justify-center text-white font-bold">
+                        🧩
                       </div>
-                      <span className="font-medium">
-                        {injectedReady ? "Browser Wallet" : "Browser Wallet (not detected)"}
-                      </span>
+                      <div className="flex flex-col text-left">
+                        <span className="font-medium">
+                          {injectedReady ? "Browser Wallet" : "Browser Wallet (not detected)"}
+                        </span>
+                        {injectedReady && (
+                          <span className="text-xs opacity-70">Rabby, Frame, OKX, …</span>
+                        )}
+                      </div>
                     </button>
                   )}
 
