@@ -2823,10 +2823,11 @@ function extractErrorMessage(error: unknown): string {
 }
 
 function ConnectControls() {
-  const { status, address } = useAccount();
-  const { disconnect } = useDisconnect();
+  const { status, address, connector: activeConnector } = useAccount();
+  const { disconnect, disconnectAsync } = useDisconnect();
   const { connectAsync, connectors } = useConnect();
   const [connecting, setConnecting] = React.useState(false);
+  const [disconnecting, setDisconnecting] = React.useState(false);
   const [showPicker, setShowPicker] = React.useState(false);
   const [injectedDetected, setInjectedDetected] = React.useState(() => hasInjectedProvider());
   const [metaMaskDetected, setMetaMaskDetected] = React.useState(() => hasMetaMaskProvider());
@@ -2911,6 +2912,45 @@ function ConnectControls() {
     return /android|iphone|ipad|ipod/i.test(ua);
   }, []);
 
+  const cleanupConnector = React.useCallback(async (connector: any) => {
+    if (!connector) return;
+
+    const label = connector?.name || connector?.id || "unknown";
+
+    try {
+      await connector.disconnect?.();
+    } catch (error) {
+      console.warn(`[disconnect] Failed to call disconnect on ${label}:`, error);
+    }
+
+    if (isWalletConnectConnector(connector)) {
+      try {
+        const provider = await connector.getProvider?.();
+        await provider?.disconnect?.();
+      } catch (error) {
+        console.warn(`[disconnect] WalletConnect provider cleanup failed for ${label}:`, error);
+      }
+    }
+
+    try {
+      connector.resetState?.();
+    } catch (error) {
+      console.warn(`[disconnect] Failed to reset state for ${label}:`, error);
+    }
+  }, []);
+
+  const cleanupAllConnectors = React.useCallback(async () => {
+    const seen = new Set<any>();
+    const candidates = [activeConnector, ...connectors];
+    for (const connector of candidates) {
+      if (!connector || seen.has(connector)) continue;
+      seen.add(connector);
+      await cleanupConnector(connector);
+    }
+  }, [activeConnector, connectors, cleanupConnector]);
+
+  const prevStatusRef = React.useRef(status);
+
   React.useEffect(() => {
     if (status !== "connecting") {
       setConnecting(false);
@@ -2918,7 +2958,41 @@ function ConnectControls() {
     if (status === "connected") {
       setShowPicker(false);
     }
-  }, [status]);
+    if (prevStatusRef.current === "connected" && status === "disconnected") {
+      void cleanupAllConnectors();
+      setShowPicker(false);
+    }
+    if (status !== "connected") {
+      setDisconnecting(false);
+    }
+    prevStatusRef.current = status;
+  }, [cleanupAllConnectors, status]);
+
+  const handleDisconnect = React.useCallback(async () => {
+    if (disconnecting) return;
+
+    setDisconnecting(true);
+    setConnecting(false);
+    setShowPicker(false);
+
+    try {
+      if (disconnectAsync) {
+        await disconnectAsync();
+      } else {
+        disconnect();
+      }
+    } catch (error) {
+      console.warn("[disconnect] wagmi disconnect failed:", error);
+    }
+
+    try {
+      await cleanupAllConnectors();
+    } catch (error) {
+      console.warn("[disconnect] Connector cleanup failed:", error);
+    }
+
+    setDisconnecting(false);
+  }, [cleanupAllConnectors, disconnect, disconnectAsync, disconnecting]);
 
   const handleConnect = React.useCallback(
     async (connector: any) => {
@@ -3159,10 +3233,11 @@ function ConnectControls() {
             {short}
           </button>
           <button
-            onClick={() => disconnect()}
-            className="px-3 py-1.5 rounded-md font-medium bg-rose-600 text-white hover:bg-rose-700 border border-transparent"
+            onClick={handleDisconnect}
+            disabled={disconnecting}
+            className="px-3 py-1.5 rounded-md font-medium bg-rose-600 text-white hover:bg-rose-700 border border-transparent disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            Disconnect
+            {disconnecting ? "Disconnecting…" : "Disconnect"}
           </button>
         </>
       )}
