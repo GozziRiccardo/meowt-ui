@@ -1522,7 +1522,14 @@ function useGameSnapshot() {
   }, [boostCostLive, boostCostRead]);
 
   // FIXED: More precise loading state
-  const stillFetchingActive = hasId && (!raw || rawFetching);
+  const rawReady =
+    !hasId ||
+    (Array.isArray(raw) &&
+      raw.length > 0 &&
+      raw.every((entry) =>
+        entry && typeof entry === "object" && ("result" in entry || "error" in entry),
+      ));
+  const stillFetchingActive = hasId && !rawReady;
   const loadingState = Boolean(
     bootHold || 
     idChangeHold || 
