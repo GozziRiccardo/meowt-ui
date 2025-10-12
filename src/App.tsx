@@ -2759,12 +2759,58 @@ function AddMeowtButtonInner() {
     </button>
   );
 }
+function hasInjectedProvider(): boolean {
+  if (typeof window === "undefined") return false;
+  const { ethereum } = window as any;
+  if (!ethereum) return false;
+
+  const candidates: any[] = Array.isArray(ethereum?.providers)
+    ? ethereum.providers.filter(Boolean)
+    : [ethereum];
+
+  const indicators = [
+    "isMetaMask",
+    "isCoinbaseWallet",
+    "isBraveWallet",
+    "isRabby",
+    "isOkxWallet",
+    "isTrust",
+    "isFrame",
+    "isTally",
+    "isImToken",
+    "isBitKeep",
+    "isTokenPocket",
+    "isLedger",
+  ];
+
+  return candidates.some((provider) => {
+    if (!provider) return false;
+    if (indicators.some((key) => provider[key])) return true;
+    const name = String(provider?.name || provider?.id || "").toLowerCase();
+    return name.includes("wallet") || name.includes("metamask");
+  });
+}
+
+function isWalletConnectConnector(connector: any): boolean {
+  const id = connector?.id;
+  const type = connector?.type;
+  return id === "walletConnect" || type === "walletConnect";
+}
+
+function extractErrorMessage(error: unknown): string {
+  if (!error) return "Please try again.";
+  const candidate =
+    (error as any)?.shortMessage || (error as any)?.message || String(error);
+  return candidate || "Please try again.";
+}
+
 function ConnectControls() {
   const { status, address } = useAccount();
   const { disconnect } = useDisconnect();
   const { connectAsync, connectors } = useConnect();
   const [connecting, setConnecting] = React.useState(false);
   const [showPicker, setShowPicker] = React.useState(false);
+  const [injectedDetected, setInjectedDetected] = React.useState(() => hasInjectedProvider());
 
   const connected = status === "connected" && !!address;
   const short = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
@@ -2785,7 +2831,39 @@ function ConnectControls() {
     [connectors]
   );
 
-  const injectedReady = Boolean(injectedConnector?.ready);
+  const injectedReady = React.useMemo(() => {
+    if (!injectedConnector) return false;
+    return Boolean(injectedConnector.ready) || injectedDetected;
+  }, [injectedConnector, injectedDetected]);
+
+  React.useEffect(() => {
+    if (injectedConnector?.ready) {
+      setInjectedDetected(true);
+    }
+  }, [injectedConnector?.ready]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+    const update = () => {
+      if (cancelled) return;
+      setInjectedDetected(hasInjectedProvider());
+    };
+
+    update();
+    const onEthereumInit = () => update();
+    window.addEventListener("ethereum#initialized", onEthereumInit as any);
+
+    const earlyCheck = window.setTimeout(update, 250);
+    const lateCheck = window.setTimeout(update, 1200);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("ethereum#initialized", onEthereumInit as any);
+      window.clearTimeout(earlyCheck);
+      window.clearTimeout(lateCheck);
+    };
+  }, []);
 
   const isMobileDevice = React.useMemo(() => {
     if (typeof navigator === "undefined") return false;
@@ -2800,12 +2878,32 @@ function ConnectControls() {
       setConnecting(true);
       try {
         console.log('[connect] Connecting with:', connector.name);
-        await connectAsync({ connector });
+        const params = { connector, chainId: TARGET_CHAIN.id } as const;
+        try {
+          await connectAsync(params);
+        } catch (error) {
+          const message = extractErrorMessage(error);
+          if (
+            isWalletConnectConnector(connector) &&
+            /connection request reset/i.test(message)
+          ) {
+            console.warn('[connect] WalletConnect reset detected, retrying once');
+            try {
+              await connector.disconnect?.();
+            } catch (resetError) {
+              console.warn('[connect] WalletConnect reset cleanup failed:', resetError);
+            }
+            await connectAsync(params);
+          } else {
+            throw error;
+          }
+        }
         setShowPicker(false);
         console.log('[connect] Connected successfully');
       } catch (error) {
         console.error('[connect] Connection failed:', error);
-        alert(`Connection failed: ${error instanceof Error ? error.message : 'Please try again'}`);
+        const message = extractErrorMessage(error);
+        alert(`Connection failed: ${message}`);
       } finally {
         setConnecting(false);
       }
