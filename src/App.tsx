@@ -2409,7 +2409,30 @@ function ActiveCard() {
       }
 
       const nuked = Boolean(mFinal?.nuked ?? mFinal?.[11] ?? false);
-      const until = readChainNow() + NUKE_MASK_SECS;
+
+      const nowChain = readChainNow();
+      const startTimeNum = Number(mFinal?.startTime ?? mFinal?.[3] ?? 0n);
+      const baseWindow = Number(mFinal?.B0 ?? mFinal?.[4] ?? 0n);
+      const freezeAnchor =
+        startTimeNum > 0 && baseWindow > 0 ? startTimeNum + baseWindow : 0;
+      const chainFreezeUntil =
+        freezeAnchor > 0 ? freezeAnchor + NUKE_MASK_SECS : 0;
+
+      if (chainFreezeUntil > 0 && chainFreezeUntil <= nowChain) {
+        if (flagged) {
+          modMaskUntilRef.current = 0;
+          modMaskMessageIdRef.current = 0n;
+          writeMaskUntil(MOD_MASK_KEY, 0);
+          setModFrozenMessage(null);
+        } else {
+          nukeMaskUntilRef.current = 0;
+          nukeMaskMessageIdRef.current = 0n;
+          writeMaskUntil(NUKE_MASK_KEY, 0);
+        }
+        return;
+      }
+
+      const until = chainFreezeUntil > 0 ? chainFreezeUntil : nowChain + NUKE_MASK_SECS;
 
       if (flagged) {
         // Respect disarm even if a new post is already active.
@@ -2446,6 +2469,55 @@ function ActiveCard() {
       /* ignore */
     }
   }
+
+  const coldProbeStampRef = React.useRef<number>(0);
+  React.useEffect(() => {
+    if (hasActive) return;
+    const client = publicClient;
+    if (!client) return;
+    const nowChain = readChainNow();
+    if (nowChain > 0 && nowChain - coldProbeStampRef.current < 2) return;
+    coldProbeStampRef.current = nowChain;
+    let cancelled = false;
+    (async () => {
+      try {
+        const latestId = (await withRetry(
+          () =>
+            client.readContract({
+              address: GAME as `0x${string}`,
+              abi: GAME_ABI,
+              functionName: "nextMessageId",
+            }) as Promise<bigint>,
+          2,
+          200,
+        )) as bigint;
+        if (cancelled) return;
+        const candidates = new Set<bigint>();
+        if (latestId && latestId > 0n) {
+          candidates.add(latestId - 1n);
+        }
+        if (lastShownIdRef.current && lastShownIdRef.current > 0n) {
+          candidates.add(lastShownIdRef.current);
+        }
+        if (modMaskMessageIdRef.current && modMaskMessageIdRef.current > 0n) {
+          candidates.add(modMaskMessageIdRef.current);
+        }
+        if (nukeMaskMessageIdRef.current && nukeMaskMessageIdRef.current > 0n) {
+          candidates.add(nukeMaskMessageIdRef.current);
+        }
+        for (const id of candidates) {
+          if (cancelled) break;
+          if (!id || id <= 0n) continue;
+          await probeResolution(id);
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasActive, publicClient]);
 
   React.useEffect(() => {
     if (!hasActive || !currentMessage || !msgId || msgId === 0n) return;
