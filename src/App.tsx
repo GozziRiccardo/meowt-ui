@@ -520,40 +520,101 @@ async function ensureAllowanceThenSettle(
   return true; // approval happened
 }
 
-function readMaskUntil(key: string): number {
+type MaskPersisted = { until: number; messageId?: string };
+
+function readMaskState(key: string): MaskPersisted {
   try {
     const raw = localStorage.getItem(key);
-    if (!raw) return 0;
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) ? parsed : 0;
+    if (!raw) return { until: 0 };
+    const trimmed = raw.trim();
+    if (trimmed.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        const until = Number.isFinite(parsed?.until)
+          ? Math.max(0, Math.floor(parsed.until))
+          : 0;
+        const msgId = typeof parsed?.messageId === "string" ? parsed.messageId : undefined;
+        return {
+          until,
+          messageId: msgId && msgId !== "0" ? msgId : undefined,
+        };
+      } catch {
+        /* fall through to numeric parse */
+      }
+    }
+    const parsedNum = Number.parseInt(trimmed, 10);
+    const until = Number.isFinite(parsedNum) ? Math.max(0, parsedNum) : 0;
+    return { until };
   } catch {
-    return 0;
+    return { until: 0 };
   }
 }
 
 const MASK_EVENT = "meowt:mask:update";
-type MaskEventDetail = { key: string; until: number };
+type MaskEventDetail = { key: string; until: number; messageId?: string | null };
 
-function emitMaskUpdate(key: string, until: number) {
+function emitMaskUpdate(key: string, until: number, messageId?: string) {
   if (typeof window === "undefined") return;
   try {
     window.dispatchEvent(
-      new CustomEvent<MaskEventDetail>(MASK_EVENT, { detail: { key, until } })
+      new CustomEvent<MaskEventDetail>(MASK_EVENT, {
+        detail: { key, until, messageId: messageId ?? null },
+      })
     );
   } catch {
     // Older browsers might not support the generic signature
-    window.dispatchEvent(new CustomEvent(MASK_EVENT, { detail: { key, until } }));
+    window.dispatchEvent(
+      new CustomEvent(MASK_EVENT, { detail: { key, until, messageId: messageId ?? null } })
+    );
   }
 }
 
-function writeMaskUntil(key: string, until: number) {
+type MaskWriteOptions = { messageId?: bigint | number | string | null };
+
+function normalizeMaskMessageId(raw: MaskWriteOptions["messageId"]): string | undefined {
+  if (raw === null || typeof raw === "undefined") return undefined;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return trimmed && trimmed !== "0" ? trimmed : undefined;
+  }
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw)) return undefined;
+    const asInt = Math.floor(raw);
+    return asInt > 0 ? String(asInt) : undefined;
+  }
   try {
-    if (until > 0) localStorage.setItem(key, String(Math.floor(until)));
-    else localStorage.removeItem(key);
+    const asBig = BigInt(raw);
+    return asBig > 0n ? asBig.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeMaskUntil(key: string, until: number, opts?: MaskWriteOptions) {
+  const normalizedUntil = Number.isFinite(until) ? Math.max(0, Math.floor(until)) : 0;
+  const messageId = normalizeMaskMessageId(opts?.messageId);
+  try {
+    if (normalizedUntil > 0) {
+      const payload: MaskPersisted = { until: normalizedUntil };
+      if (messageId) payload.messageId = messageId;
+      localStorage.setItem(key, JSON.stringify(payload));
+    } else {
+      localStorage.removeItem(key);
+    }
   } catch {
     /* ignore */
   }
-  emitMaskUpdate(key, until);
+  emitMaskUpdate(key, normalizedUntil, messageId);
+}
+
+function parseMaskMessageId(raw?: string | null): bigint {
+  if (!raw) return 0n;
+  try {
+    const big = BigInt(raw);
+    return big > 0n ? big : 0n;
+  } catch {
+    return 0n;
+  }
 }
 
 
@@ -1936,10 +1997,16 @@ function ActiveCard() {
   // Clamp any persisted "until" so it can't be wildly in the future
   React.useEffect(() => {
     const nowSec = Math.floor(Date.now() / 1000);
-    const persisted = readMaskUntil(GLORY_MASK_KEY);
-    if (persisted > 0) {
-      const clipped = Math.min(persisted, nowSec + GLORY_MAX_SPAN);
+    const persisted = readMaskState(GLORY_MASK_KEY);
+    if (persisted.until > 0) {
+      const clipped = Math.min(persisted.until, nowSec + GLORY_MAX_SPAN);
       gloryUntilRef.current = clipped > nowSec ? clipped : 0;
+    }
+    if (persisted.messageId) {
+      const storedId = parseMaskMessageId(persisted.messageId);
+      if (storedId > 0n) {
+        gloryMaskMessageIdRef.current = storedId;
+      }
     }
   }, [GLORY_MAX_SPAN]);
 
@@ -1958,7 +2025,7 @@ function ActiveCard() {
         (gloryMaskMessageIdRef.current !== msgId && msgId && msgId !== 0n)
       ) {
         gloryUntilRef.current = predictedEnd;
-        writeMaskUntil(GLORY_MASK_KEY, predictedEnd);
+        writeMaskUntil(GLORY_MASK_KEY, predictedEnd, { messageId: msgId });
       }
     } else if (
       gloryMaskMessageIdRef.current &&
@@ -2018,11 +2085,26 @@ function ActiveCard() {
     return !!id && id === modDisarmIdRef.current && now < modDisarmUntilRef.current;
   }
   React.useEffect(() => {
-    nukeMaskUntilRef.current = Math.max(
-      nukeMaskUntilRef.current,
-      readMaskUntil(NUKE_MASK_KEY)
-    );
-    modMaskUntilRef.current = Math.max(modMaskUntilRef.current, readMaskUntil(MOD_MASK_KEY));
+    const persistedNuke = readMaskState(NUKE_MASK_KEY);
+    if (persistedNuke.until > nukeMaskUntilRef.current) {
+      nukeMaskUntilRef.current = persistedNuke.until;
+    }
+    if (persistedNuke.messageId) {
+      const stored = parseMaskMessageId(persistedNuke.messageId);
+      if (stored > 0n) {
+        nukeMaskMessageIdRef.current = stored;
+      }
+    }
+    const persistedMod = readMaskState(MOD_MASK_KEY);
+    if (persistedMod.until > modMaskUntilRef.current) {
+      modMaskUntilRef.current = persistedMod.until;
+    }
+    if (persistedMod.messageId) {
+      const stored = parseMaskMessageId(persistedMod.messageId);
+      if (stored > 0n) {
+        modMaskMessageIdRef.current = stored;
+      }
+    }
   }, []);
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2030,9 +2112,14 @@ function ActiveCard() {
       const detail = (evt as CustomEvent<MaskEventDetail>).detail;
       if (!detail || typeof detail.until !== "number") return;
       const normalized = Number.isFinite(detail.until) ? Math.floor(detail.until) : 0;
+      const evtId = parseMaskMessageId(detail.messageId ?? undefined);
       if (detail.key === MOD_MASK_KEY) {
-        modMaskUntilRef.current = normalized > 0 ? normalized : 0;
-        if (normalized <= 0) {
+        if (normalized > 0) {
+          modMaskUntilRef.current = normalized;
+          if (evtId > 0n) {
+            modMaskMessageIdRef.current = evtId;
+          }
+        } else {
           const prevId = modMaskMessageIdRef.current;
           if (prevId && prevId !== 0n) {
             // Always disarm so the next post won't echo the MOD mask.
@@ -2040,16 +2127,27 @@ function ActiveCard() {
           }
           modMaskMessageIdRef.current = 0n;
           setModFrozenMessage(null);
+          modMaskUntilRef.current = 0;
         }
       } else if (detail.key === NUKE_MASK_KEY) {
-        nukeMaskUntilRef.current = normalized > 0 ? normalized : 0;
-        if (normalized <= 0) {
+        if (normalized > 0) {
+          nukeMaskUntilRef.current = normalized;
+          if (evtId > 0n) {
+            nukeMaskMessageIdRef.current = evtId;
+          }
+        } else {
           nukeMaskMessageIdRef.current = 0n;
+          nukeMaskUntilRef.current = 0;
         }
       } else if (detail.key === GLORY_MASK_KEY) {
-        gloryUntilRef.current = normalized > 0 ? normalized : 0;
-        if (normalized <= 0) {
+        if (normalized > 0) {
+          gloryUntilRef.current = normalized;
+          if (evtId > 0n) {
+            gloryMaskMessageIdRef.current = evtId;
+          }
+        } else {
           gloryMaskMessageIdRef.current = 0n;
+          gloryUntilRef.current = 0;
         }
       }
     };
@@ -2093,7 +2191,7 @@ function ActiveCard() {
     const until = Math.floor(Date.now() / 1000) + NUKE_MASK_SECS;
     if (until > modMaskUntilRef.current) {
       modMaskUntilRef.current = until;
-      writeMaskUntil(MOD_MASK_KEY, until);
+      writeMaskUntil(MOD_MASK_KEY, until, { messageId: latchedModId });
     }
     modMaskMessageIdRef.current = latchedModId;
 
@@ -2160,7 +2258,7 @@ function ActiveCard() {
       if (flagged) {
         if (until > modMaskUntilRef.current) {
           modMaskUntilRef.current = until;
-          writeMaskUntil(MOD_MASK_KEY, until);
+          writeMaskUntil(MOD_MASK_KEY, until, { messageId: msgId });
         }
         if (msgId && msgId !== 0n) {
           modMaskMessageIdRef.current = msgId;
@@ -2174,7 +2272,7 @@ function ActiveCard() {
       } else if (until > nukeMaskUntilRef.current) {
         nukeMaskUntilRef.current = until;
         nukeMaskMessageIdRef.current = msgId ?? 0n;
-        writeMaskUntil(NUKE_MASK_KEY, until);
+        writeMaskUntil(NUKE_MASK_KEY, until, { messageId: msgId });
       }
     })();
 
@@ -2230,7 +2328,7 @@ function ActiveCard() {
         if (masksSuppressed(MOD_MASK_KEY)) return;
         if (until > modMaskUntilRef.current) {
           modMaskUntilRef.current = until;
-          writeMaskUntil(MOD_MASK_KEY, until);
+          writeMaskUntil(MOD_MASK_KEY, until, { messageId: idToCheck });
         }
         if (idToCheck && idToCheck !== 0n) {
           modMaskMessageIdRef.current = idToCheck;
@@ -2253,7 +2351,7 @@ function ActiveCard() {
       if (until > nukeMaskUntilRef.current) {
         nukeMaskUntilRef.current = until;
         nukeMaskMessageIdRef.current = idToCheck ?? 0n;
-        writeMaskUntil(NUKE_MASK_KEY, until);
+        writeMaskUntil(NUKE_MASK_KEY, until, { messageId: idToCheck });
       }
     } catch {
       /* ignore */
