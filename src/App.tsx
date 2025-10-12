@@ -2094,6 +2094,8 @@ function ActiveCard() {
   const gloryMaskUntilRef = React.useRef(0);
   const gloryMaskMessageIdRef = React.useRef<bigint>(0n);
   const gloryMaskTriggeredRef = React.useRef(false);
+  const lastGloryMsgRef = React.useRef<bigint>(msgId ?? 0n);
+  const lastGlorySecRef = React.useRef(glorySec);
 
   React.useEffect(() => {
     const persisted = readMaskState(GLORY_MASK_KEY);
@@ -2112,13 +2114,18 @@ function ActiveCard() {
   }, []);
 
   React.useEffect(() => {
+    const prevMsgId = lastGloryMsgRef.current;
+    const prevGlorySec = lastGlorySecRef.current;
+
     if (msgId && msgId !== gloryMaskMessageIdRef.current) {
       gloryMaskTriggeredRef.current = false;
     }
 
+    const sameMessage = prevMsgId === (msgId ?? 0n);
+    const gloryJustTransitioned = sameMessage && prevGlorySec > 0 && glorySec === 0;
+
     if (
-      glorySec === 0 &&
-      remSec === 0 &&
+      gloryJustTransitioned &&
       msgId &&
       msgId !== 0n &&
       !gloryMaskTriggeredRef.current
@@ -2137,7 +2144,10 @@ function ActiveCard() {
         });
       }
     }
-  }, [glorySec, remSec, msgId, nowSec, snap]);
+
+    lastGloryMsgRef.current = msgId ?? 0n;
+    lastGlorySecRef.current = glorySec;
+  }, [glorySec, msgId, nowSec, snap]);
 
   React.useEffect(() => {
     if (gloryMaskUntilRef.current > 0 && nowSec >= gloryMaskUntilRef.current) {
