@@ -1383,14 +1383,19 @@ function useGameSnapshot() {
   // Boost & cooldown latches
   React.useEffect(() => {
     const boostedRem = Number(boostedRemBN ?? 0n);
-    if (boostedRem > 0) boostEndRef.current = Math.max(boostEndRef.current, nowSec + boostedRem);
-  }, [boostedRemBN, nowSec]);
-  
+    if (boostedRem > 0) {
+      const now = readChainNow();
+      boostEndRef.current = Math.max(boostEndRef.current, now + boostedRem);
+    }
+  }, [boostedRemBN]);
+
   React.useEffect(() => {
     const cooldownRem = Number(boostCooldownBN ?? 0n);
-    if (cooldownRem > 0)
-      cooldownEndRef.current = Math.max(cooldownEndRef.current, nowSec + cooldownRem);
-  }, [boostCooldownBN, nowSec]);
+    if (cooldownRem > 0) {
+      const now = readChainNow();
+      cooldownEndRef.current = Math.max(cooldownEndRef.current, now + cooldownRem);
+    }
+  }, [boostCooldownBN]);
 
   // Immunity window
   React.useEffect(() => {
