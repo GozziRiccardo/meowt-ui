@@ -2005,6 +2005,7 @@ function ReplaceBoxInner() {
 
 
 const MASK_DURATION_SECS = 11;
+const GLORY_MASK_LEAD_SECS = 2;
 const GLORY_MASK_KEY = "meowt:mask:glory";
 const NUKE_MASK_KEY = "meowt:mask:nuke";
 const MOD_MASK_KEY = "meowt:mask:mod";
@@ -2131,17 +2132,23 @@ function ActiveCard() {
 
     const sameMessage = prevMsgId === (msgId ?? 0n);
     const gloryJustTransitioned = sameMessage && prevGlorySec > 0 && glorySec === 0;
+    const gloryAboutToEnd =
+      sameMessage &&
+      prevGlorySec > GLORY_MASK_LEAD_SECS &&
+      glorySec > 0 &&
+      glorySec <= GLORY_MASK_LEAD_SECS;
 
     if (
-      gloryJustTransitioned &&
       msgId &&
       msgId !== 0n &&
-      !gloryMaskTriggeredRef.current
+      !gloryMaskTriggeredRef.current &&
+      (gloryJustTransitioned || gloryAboutToEnd)
     ) {
       const gloryJustEnded = ((snap as any)?.winGlory ?? 0) > 0;
 
-      if (gloryJustEnded) {
-        const until = nowSec + MASK_DURATION_SECS;
+      if (gloryJustEnded || gloryAboutToEnd) {
+        const lead = gloryAboutToEnd && !gloryJustTransitioned ? GLORY_MASK_LEAD_SECS : 0;
+        const until = nowSec + MASK_DURATION_SECS + lead;
         gloryMaskUntilRef.current = until;
         gloryMaskMessageIdRef.current = msgId;
         gloryMaskTriggeredRef.current = true;
