@@ -1529,7 +1529,7 @@ function useGameSnapshot() {
       raw.every((entry) =>
         entry && typeof entry === "object" && ("result" in entry || "error" in entry),
       ));
-  const stillFetchingActive = hasId && !rawReady;
+  const stillFetchingActive = hasId && (!rawReady || (rawFetching && !rawReady));
   const loadingState = Boolean(
     bootHold || 
     idChangeHold || 
