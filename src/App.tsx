@@ -1138,7 +1138,11 @@ function useGameSnapshot() {
   const ZERO_ID_GRACE_MS = 700;
   const zeroIdGraceUntilRef = React.useRef<number>(0);
 
-  const { data: id } = useReadContract({
+  const {
+    data: id,
+    error: idError,
+    isPending: idPending,
+  } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
     functionName: "activeMessageId",
@@ -1161,8 +1165,8 @@ function useGameSnapshot() {
   const zeroIdGraceActive =
     id === 0n && zeroIdGraceUntilRef.current > 0 && nowMs < zeroIdGraceUntilRef.current;
 
-  const waitingForId = typeof id === "undefined" || id === null || zeroIdGraceActive;
-  const hasId = !!id && id !== 0n;
+  const waitingForId = (idPending && !idError) || zeroIdGraceActive;
+  const hasId = typeof id === "bigint" && id !== 0n;
   const idBig = hasId ? (id as bigint) : 0n;
 
   // -------- Batched reads --------
