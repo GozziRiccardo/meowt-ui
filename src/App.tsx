@@ -1126,6 +1126,7 @@ function useGameSnapshot() {
   const INIT_HOLD_MS = 400;           // keep your values
   const ID_CHANGE_HOLD_MS = 700;
   const OPTIMISTIC_SHOW_MS = 1100;
+  const ID_PENDING_MAX_HOLD_MS = 1800;
   const SHOW_CUSHION = 1;
   const { quiet } = useQuiet();
 
@@ -1137,6 +1138,7 @@ function useGameSnapshot() {
   // --- Active id (stable via placeholderData) + zero-id boot grace ---
   const ZERO_ID_GRACE_MS = 700;
   const zeroIdGraceUntilRef = React.useRef<number>(0);
+  const idPendingSinceRef = React.useRef<number>(0);
 
   const {
     data: id,
@@ -1162,10 +1164,23 @@ function useGameSnapshot() {
   }, [id]);
 
   const nowMs = Date.now();
+  if (idPending && !idError) {
+    if (!idPendingSinceRef.current) {
+      idPendingSinceRef.current = nowMs;
+    }
+  } else {
+    idPendingSinceRef.current = 0;
+  }
+  const idPendingHoldActive =
+    idPending &&
+    !idError &&
+    idPendingSinceRef.current > 0 &&
+    nowMs - idPendingSinceRef.current < ID_PENDING_MAX_HOLD_MS;
+
   const zeroIdGraceActive =
     id === 0n && zeroIdGraceUntilRef.current > 0 && nowMs < zeroIdGraceUntilRef.current;
 
-  const waitingForId = (idPending && !idError) || zeroIdGraceActive;
+  const waitingForId = idPendingHoldActive || zeroIdGraceActive;
   const hasId = typeof id === "bigint" && id !== 0n;
   const idBig = hasId ? (id as bigint) : 0n;
 
