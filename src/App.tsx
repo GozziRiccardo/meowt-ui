@@ -1216,6 +1216,13 @@ function useGameSnapshot() {
     }
   }, [id]);
 
+  React.useEffect(() => {
+    if (isReady) return;
+    if (!idPending && !idFetching) {
+      setIsReady(true);
+    }
+  }, [isReady, idPending, idFetching]);
+
   // Reset zero-id grace when we get a non-zero ID
   React.useEffect(() => {
     if (!zeroIdGraceUntilRef.current) {
@@ -1604,7 +1611,8 @@ function useGameSnapshot() {
     stillFetchingActive
   );
 
-  const effectiveLoading = !isReady || loadingState;
+  const waitingReady = hasId ? true : isReady;
+  const effectiveLoading = !waitingReady || loadingState;
 
   return {
     id: idBig,
