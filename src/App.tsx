@@ -2815,6 +2815,27 @@ function isWalletConnectConnector(connector: any): boolean {
   return id === "walletConnect" || type === "walletConnect";
 }
 
+function resetWagmiConnectionState(): void {
+  wagmiConfig.setState((state) => {
+    if (
+      state.connections.size === 0 &&
+      state.current === null &&
+      state.status === "disconnected"
+    ) {
+      return state;
+    }
+
+    return {
+      ...state,
+      connections: new Map(),
+      current: null,
+      status: "disconnected",
+    };
+  });
+
+  void wagmiConfig.storage?.removeItem?.("recentConnectorId");
+}
+
 function extractErrorMessage(error: unknown): string {
   if (!error) return "Please try again.";
   const candidate =
@@ -2947,6 +2968,8 @@ function ConnectControls() {
       seen.add(connector);
       await cleanupConnector(connector);
     }
+
+    resetWagmiConnectionState();
   }, [activeConnector, connectors, cleanupConnector]);
 
   const prevStatusRef = React.useRef(status);
@@ -2997,6 +3020,14 @@ function ConnectControls() {
   const handleConnect = React.useCallback(
     async (connector: any) => {
       if (!connector || connecting) return;
+
+      const snapshot = wagmiConfig.state;
+      if (
+        snapshot.status !== "connected" &&
+        snapshot.connections.size > 0
+      ) {
+        resetWagmiConnectionState();
+      }
 
       setConnecting(true);
       let rejectedRetries = 0;
