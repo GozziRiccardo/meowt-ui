@@ -1123,7 +1123,7 @@ function WaitingCard() {
 
 // -------------------- Game snapshot (reads tuned for mainnet) --------------------
 function useGameSnapshot() {
-  const INIT_HOLD_MS = 400;           // keep your values
+  const INIT_HOLD_MS = 400;
   const ID_CHANGE_HOLD_MS = 700;
   const OPTIMISTIC_SHOW_MS = 1100;
   const ID_PENDING_MAX_HOLD_MS = 1800;
@@ -1131,7 +1131,7 @@ function useGameSnapshot() {
   const { quiet } = useQuiet();
 
   // -------- Boot anti-ghost settings --------
-  const BOOT_MODE_MS = 2500; // during first ~2.5s be extra strict
+  const BOOT_MODE_MS = 2500;
   const APP_BOOT_TS = React.useRef(Date.now()).current;
   const booting = Date.now() - APP_BOOT_TS < BOOT_MODE_MS;
 
@@ -1144,6 +1144,7 @@ function useGameSnapshot() {
     data: id,
     error: idError,
     isPending: idPending,
+    isFetching: idFetching,
   } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
@@ -1156,49 +1157,63 @@ function useGameSnapshot() {
     },
   });
 
+  // Reset zero-id grace when we get a non-zero ID
   React.useEffect(() => {
     if (!zeroIdGraceUntilRef.current) {
       zeroIdGraceUntilRef.current = Date.now() + ZERO_ID_GRACE_MS;
     }
-    if (id && id !== 0n) zeroIdGraceUntilRef.current = 0;
-  }, [id]);
+    if (id && id !== 0n) {
+      zeroIdGraceUntilRef.current = 0;
+    }
+  }, [id, ZERO_ID_GRACE_MS]);
 
   const nowMs = Date.now();
-  if (idPending && !idError) {
-    if (!idPendingSinceRef.current) {
-      idPendingSinceRef.current = nowMs;
+  
+  // Track pending state, but clear it once we have ANY data (including 0n)
+  React.useEffect(() => {
+    if (idPending && !idError && typeof id === 'undefined') {
+      // Truly pending - no data yet
+      if (!idPendingSinceRef.current) {
+        idPendingSinceRef.current = nowMs;
+      }
+    } else {
+      // We have data (even if it's 0n) or an error - not pending anymore
+      idPendingSinceRef.current = 0;
     }
-  } else {
-    idPendingSinceRef.current = 0;
-  }
+  }, [idPending, idError, id, nowMs]);
+
   const idPendingHoldActive =
     idPending &&
     !idError &&
+    typeof id === 'undefined' &&
     idPendingSinceRef.current > 0 &&
     nowMs - idPendingSinceRef.current < ID_PENDING_MAX_HOLD_MS;
 
   const zeroIdGraceActive =
-    id === 0n && zeroIdGraceUntilRef.current > 0 && nowMs < zeroIdGraceUntilRef.current;
+    id === 0n && 
+    zeroIdGraceUntilRef.current > 0 && 
+    nowMs < zeroIdGraceUntilRef.current &&
+    !idFetching; // Don't apply grace if actively fetching
 
   const waitingForId = idPendingHoldActive || zeroIdGraceActive;
   const hasId = typeof id === "bigint" && id !== 0n;
   const idBig = hasId ? (id as bigint) : 0n;
 
   // -------- Batched reads --------
-  const { data: raw } = useReadContracts({
+  const { data: raw, isFetching: rawFetching } = useReadContracts({
     allowFailure: true,
     contracts: hasId
       ? [
-          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "messages", args: [idBig] }, // 0
-          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "endTime", args: [idBig] }, // 1
-          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "requiredStakeToReplace" }, // 2
-          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "voteFeeLike" }, // 3
-          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "voteFeeDislike" }, // 4
-          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostCost" }, // 5
-          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostedRemaining" }, // 6
-          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostCooldownRemaining" }, // 7
-          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "isReplaceBlocked" }, // 8
-          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "windows" }, // 9
+          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "messages", args: [idBig] },
+          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "endTime", args: [idBig] },
+          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "requiredStakeToReplace" },
+          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "voteFeeLike" },
+          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "voteFeeDislike" },
+          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostCost" },
+          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostedRemaining" },
+          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostCooldownRemaining" },
+          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "isReplaceBlocked" },
+          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "windows" },
         ]
       : [],
     query: {
@@ -1223,6 +1238,7 @@ function useGameSnapshot() {
       placeholderData: (p) => p,
     },
   });
+  
   const { data: gloryRemChainBN } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
@@ -1241,7 +1257,12 @@ function useGameSnapshot() {
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
     functionName: "boostCost",
-    query: { staleTime: 0, refetchOnWindowFocus: false, placeholderData: (prev) => prev, enabled: !quiet },
+    query: { 
+      staleTime: 0, 
+      refetchOnWindowFocus: false, 
+      placeholderData: (prev) => prev, 
+      enabled: !quiet 
+    },
   });
 
   const take = (arr: any[] | undefined, i: number) =>
@@ -1276,6 +1297,7 @@ function useGameSnapshot() {
     }
     return Math.floor(Date.now() / 1000);
   }, []);
+  
   const [nowSec, setNowSec] = React.useState(() => computeChainNow());
   React.useEffect(() => {
     const iv = setInterval(
@@ -1285,7 +1307,7 @@ function useGameSnapshot() {
     return () => clearInterval(iv);
   }, [computeChainNow]);
 
-  // Refs and latches (mostly unchanged)
+  // Refs and latches
   const lastIdRef = React.useRef<bigint>(0n);
   const exposureEndRef = React.useRef<number>(0);
   const gloryEndRef = React.useRef<number>(0);
@@ -1295,7 +1317,7 @@ function useGameSnapshot() {
   const showUntilRef = React.useRef<number>(0);
   const idHoldUntilRef = React.useRef<number>(0);
 
-  // Boot & id-change holds (no optimistic show on boot)
+  // Boot & id-change holds
   const bootHold = Date.now() - APP_BOOT_TS < INIT_HOLD_MS;
   React.useEffect(() => {
     if (!hasId) return;
@@ -1307,7 +1329,6 @@ function useGameSnapshot() {
       cooldownEndRef.current = 0;
       immEndRef.current = 0;
 
-      // IMPORTANT: do not create an optimistic show window while booting
       if (!booting) {
         showUntilRef.current = Math.max(
           showUntilRef.current,
@@ -1317,7 +1338,7 @@ function useGameSnapshot() {
 
       idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS;
     }
-  }, [hasId, idBig, booting]);
+  }, [hasId, idBig, booting, OPTIMISTIC_SHOW_MS, ID_CHANGE_HOLD_MS]);
 
   React.useEffect(() => {
     if (hasId) return;
@@ -1355,15 +1376,17 @@ function useGameSnapshot() {
     setNowSec((prev) => Math.max(prev, computeChainNow()));
   }, [remChainBN, endTsNum, startTime, B0secs, computeChainNow]);
 
-  // Glory window (predict + chain)
+  // Glory window
   React.useEffect(() => {
     const predicted = startTime && B0secs && winGlory ? startTime + B0secs + winGlory : 0;
     if (predicted > 0) gloryEndRef.current = Math.max(gloryEndRef.current, predicted);
   }, [startTime, B0secs, winGlory]);
+  
   React.useEffect(() => {
     const chainGlory = Number(gloryRemChainBN ?? 0n);
     if (chainGlory > 0) gloryEndRef.current = Math.max(gloryEndRef.current, nowSec + chainGlory);
   }, [gloryRemChainBN, nowSec]);
+  
   React.useEffect(() => {
     const exp = exposureEndRef.current;
     if (exp > 0 && winGlory > 0) {
@@ -1377,6 +1400,7 @@ function useGameSnapshot() {
     const boostedRem = Number(boostedRemBN ?? 0n);
     if (boostedRem > 0) boostEndRef.current = Math.max(boostEndRef.current, nowSec + boostedRem);
   }, [boostedRemBN, nowSec]);
+  
   React.useEffect(() => {
     const cooldownRem = Number(boostCooldownBN ?? 0n);
     if (cooldownRem > 0)
@@ -1391,7 +1415,7 @@ function useGameSnapshot() {
     }
   }, [startTime, winPostImm]);
 
-  // "Show" gate base window (kept)
+  // "Show" gate base window
   React.useEffect(() => {
     const until = Math.max(exposureEndRef.current, gloryEndRef.current);
     if (until > 0) showUntilRef.current = Math.max(showUntilRef.current, until);
@@ -1427,10 +1451,9 @@ function useGameSnapshot() {
 
   const replaceLocked = Boolean(replaceBlocked) || lockLeft > 0;
 
-  // --------- NEW: proof-of-life and definitely-over guards ----------
+  // Proof-of-life and definitely-over guards
   const publicClient = usePublicClient();
 
-  // finalized confirm for the *current* id
   const [idConfirmOk, setIdConfirmOk] = React.useState<bigint | 0n>(0n);
   React.useEffect(() => {
     setIdConfirmOk(0n);
@@ -1454,26 +1477,15 @@ function useGameSnapshot() {
     };
   }, [hasId, idBig, publicClient]);
 
-  // live timers are also proof-of-life
   const liveProof = Number(remChainBN ?? 0n) > 0 || Number(gloryRemChainBN ?? 0n) > 0;
-
-  // message tuple loaded?
   const mLoaded = !!m && startTime > 0 && B0secs > 0;
-
-  // hard "definitely over" fence: start + B0 + glory + freeze <= now
   const hardOverAt =
     startTime && B0secs ? startTime + B0secs + (winGlory || 0) + (winFreeze || 0) : 0;
   const definitelyOver = !!mLoaded && hardOverAt > 0 && nowSec >= hardOverAt;
 
-  // Only consider confirmed on boot if:
-  //  - finalized agrees, OR
-  //  - live timer says >0, OR
-  //  - tuple is loaded AND it's not definitely over
   const bootConfirmed = idConfirmOk === idBig || liveProof || (mLoaded && !definitelyOver);
 
-  // Final "show" decision:
-  //  - never show while booting unless confirmed
-  //  - never show if tuple proves it's definitely over
+  // Final "show" decision
   const untilShow = Math.max(
     showUntilRef.current,
     Math.max(exposureEndRef.current, gloryEndRef.current),
@@ -1486,9 +1498,9 @@ function useGameSnapshot() {
     !bootHold &&
     !idChangeHold &&
     !waitingForId &&
-    !(hasId && !raw); // stillFetchingActive
+    !(hasId && !raw);
 
-  // Clear optimistic show once things are resolved to avoid tail flashes
+  // Clear optimistic show once resolved
   React.useEffect(() => {
     if (!hasId) return;
     if (!resolvedFlag && !nukedFlag) return;
@@ -1500,53 +1512,51 @@ function useGameSnapshot() {
     if (latestWindowEnd > now) return;
     const cutoff = now - (SHOW_CUSHION + 1);
     if (showUntilRef.current > cutoff) showUntilRef.current = cutoff;
-  }, [hasId, resolvedFlag, nukedFlag, remChainBN, gloryRemChainBN, nowSec]);
+  }, [hasId, resolvedFlag, nukedFlag, remChainBN, gloryRemChainBN, nowSec, SHOW_CUSHION]);
 
-  // === Non-zero latch for boostCost (live > batched > 0) ===
+  // Non-zero latch for boostCost
   const boostCostRef = React.useRef<bigint>(0n);
   React.useEffect(() => {
     const v = (boostCostLive ?? boostCostRead ?? 0n) as bigint;
     if (v > 0n) boostCostRef.current = v;
   }, [boostCostLive, boostCostRead]);
 
+  // FIXED: More precise loading state
+  const rawReady =
+    !hasId ||
+    (Array.isArray(raw) &&
+      raw.length > 0 &&
+      raw.every((entry) =>
+        entry && typeof entry === "object" && ("result" in entry || "error" in entry),
+      ));
+  const stillFetchingActive = hasId && (!rawReady || (rawFetching && !rawReady));
+  const loadingState = Boolean(
+    bootHold || 
+    idChangeHold || 
+    waitingForId || 
+    stillFetchingActive
+  );
+
   return {
     id: idBig,
     show: effectiveShow,
-
-    // message + clocks
     m,
     rem: BigInt(remSec),
     gloryRem: inGlory ? gloryLeft : 0,
-
-    // fees (from batch)
     feeLike,
     feeDislike,
-
-    // boosts
     boostCost: boostCostRef.current,
     boostedRem: Math.max(0, boostEndRef.current - nowSec),
     boostCooldownRem: cooldownLeft,
-
-    // windows for UI (used by masks etc.)
     winPostImm,
     winGlory,
     winFreeze,
-
-    // locks
     replaceLocked,
     lockKind,
     lockLeft,
-
-    // status
-    loading:
-      Boolean(bootHold || idChangeHold || waitingForId || (hasId && !raw)),
+    loading: loadingState,
   } as const;
 }
-
-
-
-
-
 const GameSnapshotContext = React.createContext<ReturnType<typeof useGameSnapshot> | null>(null);
 function GameSnapshotProvider({ children }: { children: React.ReactNode }) {
   const snap = useGameSnapshot();
