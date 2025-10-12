@@ -1190,8 +1190,10 @@ function useGameSnapshot() {
     idPending &&
     !idError &&
     typeof id === 'undefined' &&
-    idPendingSinceRef.current > 0 &&
-    nowMs - idPendingSinceRef.current < ID_PENDING_MAX_HOLD_MS;
+    (
+      idPendingSinceRef.current === 0 ||
+      nowMs - idPendingSinceRef.current < ID_PENDING_MAX_HOLD_MS
+    );
 
   const zeroIdGraceActive =
     id === 0n && 
