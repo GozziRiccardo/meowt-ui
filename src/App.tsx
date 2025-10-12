@@ -2991,6 +2991,23 @@ function ConnectControls() {
     prevStatusRef.current = status;
   }, [cleanupAllConnectors, status]);
 
+  React.useEffect(() => {
+    const unsubscribe = watchAccount(wagmiConfig, {
+      onChange(account) {
+        if (account.status === "connected") {
+          setConnecting(false);
+          setShowPicker(false);
+        } else if (account.status !== "connecting") {
+          setConnecting(false);
+        }
+      },
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
   const handleDisconnect = React.useCallback(async () => {
     if (disconnecting) return;
 
