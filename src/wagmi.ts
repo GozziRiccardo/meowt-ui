@@ -2,7 +2,7 @@
 import { createConfig, http } from 'wagmi'
 import type { CreateConnectorFn } from 'wagmi'
 import { base, baseSepolia } from 'wagmi/chains'
-import { coinbaseWallet, injected, walletConnect } from 'wagmi/connectors'
+import { coinbaseWallet, injected, metaMask, walletConnect } from 'wagmi/connectors'
 import { fallback } from 'viem'
 
 // --- Env helpers -------------------------------------------------------------
@@ -48,10 +48,30 @@ const transports = {
 } as const
 
 // Build connectors list
+const APP_URL =
+  typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.app'
+const APP_ICON =
+  typeof window !== 'undefined'
+    ? new URL('/brand/logo-meowt.png', window.location.origin).toString()
+    : 'https://hearmeowt.app/brand/logo-meowt.png'
+
+const APP_METADATA = {
+  name: 'HearMeOwT',
+  description: 'Post, vote, and earn $MEOWT.',
+  url: APP_URL,
+  icons: [APP_ICON],
+}
+
 const connectorsList: CreateConnectorFn[] = [
+  metaMask({
+    dappMetadata: {
+      name: APP_METADATA.name,
+      url: APP_METADATA.url,
+    },
+    useDeeplink: true,
+  }),
   injected({
     shimDisconnect: true,
-    target: 'metaMask',
   }),
   coinbaseWallet({
     appName: 'HearMeOwT',
@@ -76,17 +96,7 @@ if (WC_PROJECT_ID && WC_PROJECT_ID.length > 8) {
           '--wcm-z-index': '9999',
         },
       },
-      metadata: {
-        name: 'HearMeOwT',
-        description: 'Post, vote, and earn $MEOWT.',
-        url:
-          typeof window !== 'undefined' ? window.location.origin : 'https://hearmeowt.app',
-        icons: [
-          typeof window !== 'undefined'
-            ? new URL('/brand/logo-meowt.png', window.location.origin).toString()
-            : 'https://hearmeowt.app/brand/logo-meowt.png',
-        ],
-      },
+      metadata: APP_METADATA,
     })
   )
 } else {
