@@ -624,6 +624,14 @@ function writeMaskUntil(key: string, until: number, opts?: MaskWriteOptions) {
       };
       if (messageId) payload.messageId = messageId;
       localStorage.setItem(key, JSON.stringify(payload));
+    } else if (messageId) {
+      const payload: MaskPersisted = {
+        until: 0,
+        type: opts?.type,
+        triggeredAt: readChainNow(),
+        messageId,
+      };
+      localStorage.setItem(key, JSON.stringify(payload));
     } else {
       localStorage.removeItem(key);
     }
@@ -2089,11 +2097,17 @@ function ActiveCard() {
 
   React.useEffect(() => {
     const persisted = readMaskState(GLORY_MASK_KEY);
+
+    if (persisted.messageId) {
+      const parsedId = parseMaskMessageId(persisted.messageId);
+      if (parsedId !== 0n) {
+        gloryMaskMessageIdRef.current = parsedId;
+        gloryMaskTriggeredRef.current = true;
+      }
+    }
+
     if (persisted.until > nowSec) {
       gloryMaskUntilRef.current = persisted.until;
-      if (persisted.messageId) {
-        gloryMaskMessageIdRef.current = parseMaskMessageId(persisted.messageId);
-      }
     }
   }, []);
 
@@ -2127,10 +2141,9 @@ function ActiveCard() {
 
   React.useEffect(() => {
     if (gloryMaskUntilRef.current > 0 && nowSec >= gloryMaskUntilRef.current) {
+      const lastGloryId = gloryMaskMessageIdRef.current;
       gloryMaskUntilRef.current = 0;
-      gloryMaskMessageIdRef.current = 0n;
-      gloryMaskTriggeredRef.current = false;
-      writeMaskUntil(GLORY_MASK_KEY, 0);
+      writeMaskUntil(GLORY_MASK_KEY, 0, { messageId: lastGloryId, type: "glory" });
     }
   }, [nowSec]);
 
