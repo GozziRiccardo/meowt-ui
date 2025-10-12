@@ -2005,7 +2005,7 @@ function ReplaceBoxInner() {
 
 
 const MASK_DURATION_SECS = 11;
-const GLORY_MASK_LEAD_SECS = 1;
+const GLORY_MASK_LEAD_SECS = 2;
 const GLORY_MASK_KEY = "meowt:mask:glory";
 const NUKE_MASK_KEY = "meowt:mask:nuke";
 const MOD_MASK_KEY = "meowt:mask:mod";
