@@ -827,12 +827,15 @@ export function FinalizingMask({
     >
       <div className="absolute inset-0 bg-black/90" />
       {imgUrl && (
-        <img
-          src={imgUrl}
-          alt=""
-          className="absolute inset-0 w-full h-full object-cover pointer-events-none select-none"
-          draggable={false}
-        />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <img
+            src={imgUrl}
+            alt=""
+            className="w-full h-full max-w-full max-h-full object-contain pointer-events-none select-none"
+            style={{ objectFit: "contain", objectPosition: "center" }}
+            draggable={false}
+          />
+        </div>
       )}
       <div
         className="absolute left-0 right-0 flex justify-center"
