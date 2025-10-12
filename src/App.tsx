@@ -35,6 +35,7 @@ import { watchAccount, watchChainId, getAccount, reconnect } from "wagmi/actions
 // at the top of App.tsx
 import { RewardsHeaderButton, RewardsDock } from "./rewardsAuto";
 import { NetworkQuietProvider, useQuiet, runQuietly } from "./quiet";
+import { ChainTimeProvider, useChainTime, readChainNow, readChainNowMs } from "./lib/chainTime";
 import InstallBanner from "./components/InstallBanner";
 import W3MDebug from "./components/W3MDebug";
 
@@ -1160,14 +1161,14 @@ function useGameSnapshot() {
   // Reset zero-id grace when we get a non-zero ID
   React.useEffect(() => {
     if (!zeroIdGraceUntilRef.current) {
-      zeroIdGraceUntilRef.current = Date.now() + ZERO_ID_GRACE_MS;
+      zeroIdGraceUntilRef.current = readChainNowMs() + ZERO_ID_GRACE_MS;
     }
     if (id && id !== 0n) {
       zeroIdGraceUntilRef.current = 0;
     }
   }, [id, ZERO_ID_GRACE_MS]);
 
-  const nowMs = Date.now();
+  const { nowSec, nowMs, sync: syncChainTime } = useChainTime();
   
   // Track pending state, but clear it once we have ANY data (including 0n)
   React.useEffect(() => {
@@ -1287,26 +1288,6 @@ function useGameSnapshot() {
   const startTime = Number((m?.startTime ?? m?.[3] ?? 0n) as bigint);
   const B0secs = Number((m?.B0 ?? m?.[4] ?? 0n) as bigint);
 
-  // Local ticker (anchored to chain time)
-  const chainNowRef = React.useRef<{ epoch: number; fetchedAt: number }>({ epoch: 0, fetchedAt: 0 });
-  const computeChainNow = React.useCallback(() => {
-    const anchor = chainNowRef.current;
-    if (anchor.epoch > 0 && anchor.fetchedAt > 0) {
-      const elapsed = Math.floor((Date.now() - anchor.fetchedAt) / 1000);
-      return anchor.epoch + Math.max(0, elapsed);
-    }
-    return Math.floor(Date.now() / 1000);
-  }, []);
-  
-  const [nowSec, setNowSec] = React.useState(() => computeChainNow());
-  React.useEffect(() => {
-    const iv = setInterval(
-      () => setNowSec((prev) => Math.max(prev, computeChainNow())),
-      500
-    );
-    return () => clearInterval(iv);
-  }, [computeChainNow]);
-
   // Refs and latches
   const lastIdRef = React.useRef<bigint>(0n);
   const exposureEndRef = React.useRef<number>(0);
@@ -1330,13 +1311,14 @@ function useGameSnapshot() {
       immEndRef.current = 0;
 
       if (!booting) {
+        const currentNow = readChainNow();
         showUntilRef.current = Math.max(
           showUntilRef.current,
-          Math.floor(Date.now() / 1000) + Math.ceil(OPTIMISTIC_SHOW_MS / 1000),
+          currentNow + Math.ceil(OPTIMISTIC_SHOW_MS / 1000),
         );
       }
 
-      idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS;
+      idHoldUntilRef.current = readChainNowMs() + ID_CHANGE_HOLD_MS;
     }
   }, [hasId, idBig, booting, OPTIMISTIC_SHOW_MS, ID_CHANGE_HOLD_MS]);
 
@@ -1351,7 +1333,7 @@ function useGameSnapshot() {
     showUntilRef.current = 0;
   }, [hasId]);
 
-  const idChangeHold = Date.now() < idHoldUntilRef.current;
+  const idChangeHold = nowMs < idHoldUntilRef.current;
 
   // End/exposure window
   const endTsNum = Number(endTsBN ?? 0n);
@@ -1361,6 +1343,7 @@ function useGameSnapshot() {
   }, [endTsNum, startTime, B0secs]);
 
   React.useEffect(() => {
+    if (!hasId) return;
     const rem = Number(remChainBN ?? 0n);
     if (!Number.isFinite(rem) || rem < 0) return;
     const fallbackEnd =
@@ -1371,10 +1354,9 @@ function useGameSnapshot() {
         : 0;
     if (fallbackEnd <= 0) return;
     const anchorEpoch = fallbackEnd - rem;
-    if (!Number.isFinite(anchorEpoch)) return;
-    chainNowRef.current = { epoch: anchorEpoch, fetchedAt: Date.now() };
-    setNowSec((prev) => Math.max(prev, computeChainNow()));
-  }, [remChainBN, endTsNum, startTime, B0secs, computeChainNow]);
+    if (!Number.isFinite(anchorEpoch) || anchorEpoch <= 0) return;
+    syncChainTime(anchorEpoch);
+  }, [hasId, remChainBN, startTime, B0secs, syncChainTime, endTsNum]);
 
   // Glory window
   React.useEffect(() => {
@@ -1929,7 +1911,7 @@ const GLORY_MASK_LATCH_PAD = 0; // start mask exactly when glory hits zero
 let maskSuppressionUntil = 0;
 let suppressedMaskTypes = new Set<string>();
 function suppressMasksFor(seconds: number, types: string[] = []) {
-  const next = Math.floor(Date.now() / 1000) + Math.max(0, seconds);
+  const next = readChainNow() + Math.max(0, seconds);
   maskSuppressionUntil = Math.max(maskSuppressionUntil, next);
   if (types.length === 0) {
     suppressedMaskTypes.add("*");
@@ -1939,11 +1921,11 @@ function suppressMasksFor(seconds: number, types: string[] = []) {
 }
 function extendMaskSuppression(seconds: number) {
   if (maskSuppressionUntil <= 0) return;
-  const next = Math.floor(Date.now() / 1000) + Math.max(0, seconds);
+  const next = readChainNow() + Math.max(0, seconds);
   maskSuppressionUntil = Math.max(maskSuppressionUntil, next);
 }
 function masksSuppressed(type?: string): boolean {
-  const now = Math.floor(Date.now() / 1000);
+  const now = readChainNow();
   if (maskSuppressionUntil <= now) {
     maskSuppressionUntil = 0;
     if (suppressedMaskTypes.size > 0) suppressedMaskTypes.clear();
@@ -2016,7 +1998,7 @@ function ActiveCard() {
   const remSec = Number((snap as any)?.rem ?? 0n);
   const glorySec = Number((snap as any)?.gloryRem ?? 0);
   const MASK_SECS = Number((snap as any)?.winFreeze ?? 11);
-  const now = Number((snap as any)?.now ?? Math.floor(Date.now() / 1000));
+  const now = Number((snap as any)?.now ?? readChainNow());
 
   // ========= POST-GLORY FREEZE MASK (clamped & de-flickered) =========
   const GLORY_MAX_SPAN =
@@ -2028,7 +2010,7 @@ function ActiveCard() {
 
   // Clamp any persisted "until" so it can't be wildly in the future
   React.useEffect(() => {
-    const nowSec = Math.floor(Date.now() / 1000);
+    const nowSec = readChainNow();
     const persisted = readMaskState(GLORY_MASK_KEY);
     if (persisted.until > 0) {
       const clipped = Math.min(persisted.until, nowSec + GLORY_MAX_SPAN);
@@ -2125,7 +2107,7 @@ function ActiveCard() {
   function disarmModFor(id: bigint, seconds: number) {
     if (!id || id === 0n) return;
     modDisarmIdRef.current = id;
-    modDisarmUntilRef.current = Math.floor(Date.now() / 1000) + Math.max(0, seconds);
+    modDisarmUntilRef.current = readChainNow() + Math.max(0, seconds);
   }
   function isModDisarmed(id: bigint) {
     return !!id && id === modDisarmIdRef.current && now < modDisarmUntilRef.current;
@@ -2266,7 +2248,7 @@ function ActiveCard() {
     // Respect disarm regardless of active/inactive state.
     if (isModDisarmed(latchedModId)) return;
 
-    const until = Math.floor(Date.now() / 1000) + NUKE_MASK_SECS;
+    const until = readChainNow() + NUKE_MASK_SECS;
     if (until > modMaskUntilRef.current) {
       modMaskUntilRef.current = until;
       writeMaskUntil(MOD_MASK_KEY, until, { messageId: latchedModId });
@@ -2332,7 +2314,7 @@ function ActiveCard() {
       if (cancelled) return;
       if (masksSuppressed(flagged ? MOD_MASK_KEY : NUKE_MASK_KEY)) return;
 
-      const until = Math.floor(Date.now() / 1000) + NUKE_MASK_SECS;
+      const until = readChainNow() + NUKE_MASK_SECS;
       if (flagged) {
         if (until > modMaskUntilRef.current) {
           modMaskUntilRef.current = until;
@@ -2398,7 +2380,7 @@ function ActiveCard() {
       }
 
       const nuked = Boolean(mFinal?.nuked ?? mFinal?.[11] ?? false);
-      const until = Math.floor(Date.now() / 1000) + NUKE_MASK_SECS;
+      const until = readChainNow() + NUKE_MASK_SECS;
 
       if (flagged) {
         // Respect disarm even if a new post is already active.
@@ -3725,8 +3707,10 @@ export default function App() {
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={qc}>
         <NetworkQuietProvider>
-          <W3MDebug />
-          <AppInner />
+          <ChainTimeProvider>
+            <W3MDebug />
+            <AppInner />
+          </ChainTimeProvider>
         </NetworkQuietProvider>
       </QueryClientProvider>
     </WagmiProvider>
