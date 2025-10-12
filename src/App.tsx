@@ -1232,6 +1232,8 @@ function useGameSnapshot() {
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
       refetchOnWindowFocus: false,
+      refetchInterval: hasId && !quiet ? 1000 : false,
+      refetchIntervalInBackground: true,
       placeholderData: (prev) => prev,
     },
   });
@@ -1247,6 +1249,7 @@ function useGameSnapshot() {
       staleTime: 0,
       refetchOnWindowFocus: false,
       refetchInterval: 1000,
+      refetchIntervalInBackground: true,
       placeholderData: (p) => p,
     },
   });
@@ -1260,6 +1263,7 @@ function useGameSnapshot() {
       staleTime: 0,
       refetchOnWindowFocus: false,
       refetchInterval: 1000,
+      refetchIntervalInBackground: true,
       placeholderData: (p) => p,
     },
   });
@@ -1349,9 +1353,47 @@ function useGameSnapshot() {
   // End/exposure window
   const endTsNum = Number(endTsBN ?? 0n);
   React.useEffect(() => {
-    const e = endTsNum > 0 ? endTsNum : startTime && B0secs ? startTime + B0secs : 0;
-    if (e > 0) exposureEndRef.current = e;
-  }, [endTsNum, startTime, B0secs]);
+    let nextExposure = 0;
+    if (endTsNum > 0) {
+      nextExposure = endTsNum;
+    } else if (startTime && B0secs) {
+      nextExposure = startTime + B0secs;
+    } else {
+      const rem = Number(remChainBN ?? 0n);
+      if (Number.isFinite(rem) && rem > 0) {
+        nextExposure = nowSec + rem;
+      }
+    }
+
+    exposureEndRef.current = nextExposure;
+
+    let nextGlory = 0;
+    if (nextExposure > 0 && winGlory > 0) {
+      nextGlory = nextExposure + winGlory;
+    } else {
+      const chainGlory = Number(gloryRemChainBN ?? 0n);
+      if (Number.isFinite(chainGlory) && chainGlory > 0) {
+        nextGlory = nowSec + chainGlory;
+      }
+    }
+
+    gloryEndRef.current = nextGlory;
+
+    const until = Math.max(nextExposure, nextGlory);
+    if (until > 0) {
+      showUntilRef.current = until;
+    } else if (showUntilRef.current <= nowSec) {
+      showUntilRef.current = 0;
+    }
+  }, [
+    endTsNum,
+    startTime,
+    B0secs,
+    remChainBN,
+    nowSec,
+    winGlory,
+    gloryRemChainBN,
+  ]);
 
   React.useEffect(() => {
     if (!hasId) return;
@@ -1369,55 +1411,30 @@ function useGameSnapshot() {
     syncChainTime(anchorEpoch);
   }, [hasId, remChainBN, startTime, B0secs, syncChainTime, endTsNum]);
 
-  // Glory window
-  React.useEffect(() => {
-    const predicted = startTime && B0secs && winGlory ? startTime + B0secs + winGlory : 0;
-    if (predicted > 0) gloryEndRef.current = Math.max(gloryEndRef.current, predicted);
-  }, [startTime, B0secs, winGlory]);
-  
-  React.useEffect(() => {
-    const chainGlory = Number(gloryRemChainBN ?? 0n);
-    if (chainGlory > 0) gloryEndRef.current = Math.max(gloryEndRef.current, nowSec + chainGlory);
-  }, [gloryRemChainBN, nowSec]);
-  
-  React.useEffect(() => {
-    const exp = exposureEndRef.current;
-    if (exp > 0 && winGlory > 0) {
-      const hardEnd = exp + winGlory;
-      if (gloryEndRef.current > hardEnd) gloryEndRef.current = hardEnd;
-    }
-  }, [endTsNum, startTime, B0secs, winGlory]);
-
   // Boost & cooldown latches
   React.useEffect(() => {
     const boostedRem = Number(boostedRemBN ?? 0n);
     if (boostedRem > 0) {
-      const now = readChainNow();
-      boostEndRef.current = Math.max(boostEndRef.current, now + boostedRem);
+      boostEndRef.current = readChainNow() + boostedRem;
+    } else if (boostedRem === 0) {
+      boostEndRef.current = 0;
     }
   }, [boostedRemBN]);
 
   React.useEffect(() => {
     const cooldownRem = Number(boostCooldownBN ?? 0n);
     if (cooldownRem > 0) {
-      const now = readChainNow();
-      cooldownEndRef.current = Math.max(cooldownEndRef.current, now + cooldownRem);
+      cooldownEndRef.current = readChainNow() + cooldownRem;
+    } else if (cooldownRem === 0) {
+      cooldownEndRef.current = 0;
     }
   }, [boostCooldownBN]);
 
   // Immunity window
   React.useEffect(() => {
-    if (startTime && winPostImm) {
-      const e = startTime + winPostImm;
-      if (e > 0) immEndRef.current = Math.max(immEndRef.current, e);
-    }
+    const immEnd = startTime && winPostImm ? startTime + winPostImm : 0;
+    immEndRef.current = immEnd > 0 ? immEnd : 0;
   }, [startTime, winPostImm]);
-
-  // "Show" gate base window
-  React.useEffect(() => {
-    const until = Math.max(exposureEndRef.current, gloryEndRef.current);
-    if (until > 0) showUntilRef.current = Math.max(showUntilRef.current, until);
-  }, [endTsNum, startTime, B0secs, winGlory, gloryRemChainBN]);
 
   // Derived clocks
   const exposureLeft = Math.max(0, exposureEndRef.current - nowSec);
