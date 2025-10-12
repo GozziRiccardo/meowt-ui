@@ -2024,6 +2024,7 @@ function ActiveCard() {
 
   const gloryUntilRef = React.useRef(0);
   const gloryMaskMessageIdRef = React.useRef<bigint>(0n);
+  const lastMsgIdRef = React.useRef<bigint>(0n);
 
   // Clamp any persisted "until" so it can't be wildly in the future
   React.useEffect(() => {
@@ -2075,6 +2076,21 @@ function ActiveCard() {
       writeMaskUntil(GLORY_MASK_KEY, 0);
     }
   }, [glorySec, now, MASK_SECS, msgId]);
+
+  React.useEffect(() => {
+    if (msgId && msgId !== 0n) {
+      const changed = lastMsgIdRef.current !== msgId;
+      lastMsgIdRef.current = msgId;
+      if (changed && glorySec <= 0 && gloryUntilRef.current > 0) {
+        // Message rolled over while we're in immunity — scrub any lingering mask
+        gloryUntilRef.current = 0;
+        gloryMaskMessageIdRef.current = 0n;
+        writeMaskUntil(GLORY_MASK_KEY, 0);
+      }
+    } else if (!msgId || msgId === 0n) {
+      lastMsgIdRef.current = 0n;
+    }
+  }, [msgId, glorySec]);
 
   // Show the mask slightly before the end, or whenever the timer is latched
   const latchPadStart =
