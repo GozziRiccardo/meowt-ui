@@ -527,7 +527,13 @@ async function ensureAllowanceThenSettle(
   return true; // approval happened
 }
 
-type MaskPersisted = { until: number; messageId?: string };
+type MaskType = "glory" | "nuke" | "mod";
+type MaskPersisted = {
+  until: number;
+  messageId?: string;
+  type?: MaskType;
+  triggeredAt?: number;
+};
 
 function readMaskState(key: string): MaskPersisted {
   try {
@@ -541,9 +547,15 @@ function readMaskState(key: string): MaskPersisted {
           ? Math.max(0, Math.floor(parsed.until))
           : 0;
         const msgId = typeof parsed?.messageId === "string" ? parsed.messageId : undefined;
+        const type = parsed?.type as MaskType | undefined;
+        const triggeredAt = Number.isFinite(parsed?.triggeredAt)
+          ? Math.max(0, Math.floor(parsed.triggeredAt))
+          : undefined;
         return {
           until,
           messageId: msgId && msgId !== "0" ? msgId : undefined,
+          type,
+          triggeredAt,
         };
       } catch {
         /* fall through to numeric parse */
@@ -576,7 +588,10 @@ function emitMaskUpdate(key: string, until: number, messageId?: string) {
   }
 }
 
-type MaskWriteOptions = { messageId?: bigint | number | string | null };
+type MaskWriteOptions = {
+  messageId?: bigint | number | string | null;
+  type?: MaskType;
+};
 
 function normalizeMaskMessageId(raw: MaskWriteOptions["messageId"]): string | undefined {
   if (raw === null || typeof raw === "undefined") return undefined;
@@ -602,7 +617,11 @@ function writeMaskUntil(key: string, until: number, opts?: MaskWriteOptions) {
   const messageId = normalizeMaskMessageId(opts?.messageId);
   try {
     if (normalizedUntil > 0) {
-      const payload: MaskPersisted = { until: normalizedUntil };
+      const payload: MaskPersisted = {
+        until: normalizedUntil,
+        type: opts?.type,
+        triggeredAt: readChainNow(),
+      };
       if (messageId) payload.messageId = messageId;
       localStorage.setItem(key, JSON.stringify(payload));
     } else {
@@ -824,12 +843,26 @@ export function FinalizingMask({
       window.scrollTo(0, scrollY);
     };
   }, []);
+  React.useEffect(() => {
+    const preventNav = (_e: BeforeUnloadEvent) => {
+      return undefined;
+    };
+    window.addEventListener("beforeunload", preventNav);
+    return () => window.removeEventListener("beforeunload", preventNav);
+  }, []);
   return createPortal(
     <div
       className="fixed inset-0 z-[99999] pointer-events-auto"
       role="dialog"
       aria-modal="true"
       aria-label="Finalizing"
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+      }}
     >
       <div className="absolute inset-0 bg-black/90" />
       {imgUrl && (
@@ -1166,6 +1199,14 @@ function useGameSnapshot() {
       placeholderData: (prev) => prev,
     },
   });
+
+  const [isReady, setIsReady] = React.useState(false);
+
+  React.useEffect(() => {
+    if (typeof id !== "undefined") {
+      setIsReady(true);
+    }
+  }, [id]);
 
   // Reset zero-id grace when we get a non-zero ID
   React.useEffect(() => {
@@ -1549,11 +1590,13 @@ function useGameSnapshot() {
       ));
   const stillFetchingActive = hasId && (!rawReady || (rawFetching && !rawReady));
   const loadingState = Boolean(
-    bootHold || 
-    idChangeHold || 
-    waitingForId || 
+    bootHold ||
+    idChangeHold ||
+    waitingForId ||
     stillFetchingActive
   );
+
+  const effectiveLoading = !isReady || loadingState;
 
   return {
     id: idBig,
@@ -1573,7 +1616,7 @@ function useGameSnapshot() {
     replaceLocked,
     lockKind,
     lockLeft,
-    loading: loadingState,
+    loading: effectiveLoading,
   } as const;
 }
 const GameSnapshotContext = React.createContext<ReturnType<typeof useGameSnapshot> | null>(null);
@@ -1668,7 +1711,6 @@ function PostBoxInner() {
         throw e;
       });
 
-      suppressMasksFor(12, [MOD_MASK_KEY, NUKE_MASK_KEY]);
       if (!publicClient || !address) throw new Error("Wallet not connected");
       const dec = Number(decimals ?? 18);
       const stakeWei = parseUnits(stake || "0", dec);
@@ -1718,12 +1760,12 @@ function PostBoxInner() {
         nudgeQueries(qc, [0, 200, 800, 1600, 3000]);
         writeMaskUntil(GLORY_MASK_KEY, 0);
       });
+      suppressMasksFor(15);
       setText("");
       setToast("Post confirmed ✨");
     } catch (e: any) {
       setToast(preflightError || tidyError(e));
     } finally {
-      extendMaskSuppression(6);
       setPosting(false);
       setTimeout(() => setToast(""), 1600);
     }
@@ -1837,7 +1879,6 @@ function ReplaceBoxInner() {
         throw e;
       });
 
-      suppressMasksFor(12, [MOD_MASK_KEY, NUKE_MASK_KEY]);
       if (!publicClient || !address) throw new Error("Wallet not connected");
 
       const dec = Number(decimals ?? 18);
@@ -1890,11 +1931,11 @@ function ReplaceBoxInner() {
         nudgeQueries(qc, [0, 200, 800, 1600, 3000]);
         writeMaskUntil(GLORY_MASK_KEY, 0);
       });
+      suppressMasksFor(15);
       setToast("Replacement confirmed ✨");
     } catch (e: any) {
       setToast(preflightError || tidyError(e));
     } finally {
-      extendMaskSuppression(6);
       setReplacing(false);
       setTimeout(() => setToast(""), 1600);
     }
@@ -1947,43 +1988,39 @@ function ReplaceBoxInner() {
 
 
 
+const MASK_DURATION_SECS = 11;
 const GLORY_MASK_KEY = "meowt:mask:glory";
 const NUKE_MASK_KEY = "meowt:mask:nuke";
 const MOD_MASK_KEY = "meowt:mask:mod";
-const GLORY_MASK_LATCH_PAD = 0; // start mask exactly when glory hits zero
 
-let maskSuppressionUntil = 0;
-let suppressedMaskTypes = new Set<string>();
-function suppressMasksFor(seconds: number, types: string[] = []) {
-  const next = readChainNow() + Math.max(0, seconds);
-  maskSuppressionUntil = Math.max(maskSuppressionUntil, next);
-  if (types.length === 0) {
-    suppressedMaskTypes.add("*");
-  } else {
-    types.forEach((t) => suppressedMaskTypes.add(t));
+const MASK_SUPPRESS_EVENT = "meowt:mask:suppress";
+type MaskSuppressEventDetail = { seconds: number };
+
+function emitMaskSuppress(seconds: number) {
+  if (typeof window === "undefined") return;
+  const detail = { seconds } satisfies MaskSuppressEventDetail;
+  try {
+    window.dispatchEvent(
+      new CustomEvent<MaskSuppressEventDetail>(MASK_SUPPRESS_EVENT, {
+        detail,
+      })
+    );
+  } catch {
+    window.dispatchEvent(new CustomEvent(MASK_SUPPRESS_EVENT, { detail }));
   }
 }
-function extendMaskSuppression(seconds: number) {
-  if (maskSuppressionUntil <= 0) return;
-  const next = readChainNow() + Math.max(0, seconds);
-  maskSuppressionUntil = Math.max(maskSuppressionUntil, next);
-}
-function masksSuppressed(type?: string): boolean {
-  const now = readChainNow();
-  if (maskSuppressionUntil <= now) {
-    maskSuppressionUntil = 0;
-    if (suppressedMaskTypes.size > 0) suppressedMaskTypes.clear();
-    return false;
-  }
-  if (suppressedMaskTypes.has("*")) return true;
-  if (!type) return suppressedMaskTypes.size > 0;
-  return suppressedMaskTypes.has(type);
+
+function suppressMasksFor(seconds: number) {
+  const duration = Math.max(0, Math.floor(seconds));
+  if (duration <= 0) return;
+  emitMaskSuppress(duration);
 }
 
 // -------------------- Active card (with masks & boost) --------------------
 
 function ActiveCard() {
   const snap = useSnap();
+  const { nowSec } = useChainTime();
 
   const isConnected = useUiConnected();
   const { address } = useAccount();
@@ -2034,252 +2071,151 @@ function ActiveCard() {
       enabled: Boolean(latchedModId && latchedModId !== 0n),
       staleTime: 0,
       refetchOnWindowFocus: false,
+      refetchInterval: 1000,
       placeholderData: (prev) => prev,
     },
   });
 
-  // --- clocks / windows from snap ---
   const remSec = Number((snap as any)?.rem ?? 0n);
   const glorySec = Number((snap as any)?.gloryRem ?? 0);
-  const MASK_SECS = Number((snap as any)?.winFreeze ?? 11);
-  const now = Number((snap as any)?.now ?? readChainNow());
 
-  // ========= POST-GLORY FREEZE MASK (clamped & de-flickered) =========
-  const GLORY_MAX_SPAN =
-    Math.max(0, Number((snap as any)?.winGlory ?? 0) + MASK_SECS + 2);
+  const lastActiveMessageRef = React.useRef<{ id: bigint; message: any } | null>(null);
+  const [modFrozenMessage, setModFrozenMessage] = React.useState<{ id: bigint; message: any } | null>(null);
 
-  const gloryUntilRef = React.useRef(0);
+  // ========= PART 2A: GLORY MASK LOGIC =========
+  const gloryMaskUntilRef = React.useRef(0);
   const gloryMaskMessageIdRef = React.useRef<bigint>(0n);
-  const lastMsgIdRef = React.useRef<bigint>(0n);
+  const gloryMaskTriggeredRef = React.useRef(false);
 
-  const clearGloryMask = React.useCallback(() => {
-    if (gloryUntilRef.current <= 0 && gloryMaskMessageIdRef.current === 0n) return;
-    gloryUntilRef.current = 0;
-    gloryMaskMessageIdRef.current = 0n;
-    writeMaskUntil(GLORY_MASK_KEY, 0);
+  React.useEffect(() => {
+    const persisted = readMaskState(GLORY_MASK_KEY);
+    if (persisted.until > nowSec) {
+      gloryMaskUntilRef.current = persisted.until;
+      if (persisted.messageId) {
+        gloryMaskMessageIdRef.current = parseMaskMessageId(persisted.messageId);
+      }
+    }
   }, []);
 
-  // Clamp any persisted "until" so it can't be wildly in the future
   React.useEffect(() => {
-    const nowSec = readChainNow();
-    const persisted = readMaskState(GLORY_MASK_KEY);
-    if (persisted.until > 0) {
-      const clipped = Math.min(persisted.until, nowSec + GLORY_MAX_SPAN);
-      gloryUntilRef.current = clipped > nowSec ? clipped : 0;
+    if (msgId && msgId !== gloryMaskMessageIdRef.current) {
+      gloryMaskTriggeredRef.current = false;
     }
-    if (persisted.messageId) {
-      const storedId = parseMaskMessageId(persisted.messageId);
-      if (storedId > 0n) {
-        gloryMaskMessageIdRef.current = storedId;
-      }
-    }
-  }, [GLORY_MAX_SPAN]);
 
-  React.useEffect(() => {
-    if (glorySec > 0) {
-      // Track the message id to clear mask when a new message arrives
-      if (msgId && msgId !== 0n) {
-        gloryMaskMessageIdRef.current = msgId;
-      }
-
-      // Always align the stored "until" to the current prediction
-      const predictedEnd = now + glorySec + MASK_SECS;
-      if (
-        gloryUntilRef.current === 0 ||
-        gloryUntilRef.current > predictedEnd ||
-        (gloryMaskMessageIdRef.current !== msgId && msgId && msgId !== 0n)
-      ) {
-        gloryUntilRef.current = predictedEnd;
-        writeMaskUntil(GLORY_MASK_KEY, predictedEnd, { messageId: msgId });
-      }
-    } else if (
-      gloryMaskMessageIdRef.current &&
+    if (
+      glorySec === 0 &&
+      remSec === 0 &&
       msgId &&
       msgId !== 0n &&
-      gloryMaskMessageIdRef.current !== msgId
+      !gloryMaskTriggeredRef.current
     ) {
-      // New message → drop any old latched glory mask
-      clearGloryMask();
-    } else if (gloryUntilRef.current > 0 && now >= gloryUntilRef.current) {
-      // Timer naturally ended
-      clearGloryMask();
+      const gloryJustEnded = ((snap as any)?.winGlory ?? 0) > 0;
+
+      if (gloryJustEnded) {
+        const until = nowSec + MASK_DURATION_SECS;
+        gloryMaskUntilRef.current = until;
+        gloryMaskMessageIdRef.current = msgId;
+        gloryMaskTriggeredRef.current = true;
+
+        writeMaskUntil(GLORY_MASK_KEY, until, {
+          messageId: msgId,
+          type: "glory",
+        });
+      }
     }
-  }, [glorySec, now, MASK_SECS, msgId, clearGloryMask]);
+  }, [glorySec, remSec, msgId, nowSec, snap]);
 
   React.useEffect(() => {
-    if (msgId && msgId !== 0n) {
-      const changed = lastMsgIdRef.current !== msgId;
-      lastMsgIdRef.current = msgId;
-      if (changed && glorySec <= 0 && gloryUntilRef.current > 0) {
-        // Message rolled over while we're in immunity — scrub any lingering mask
-        clearGloryMask();
-      }
-    } else if (!msgId || msgId === 0n) {
-      lastMsgIdRef.current = 0n;
+    if (gloryMaskUntilRef.current > 0 && nowSec >= gloryMaskUntilRef.current) {
+      gloryMaskUntilRef.current = 0;
+      gloryMaskMessageIdRef.current = 0n;
+      gloryMaskTriggeredRef.current = false;
+      writeMaskUntil(GLORY_MASK_KEY, 0);
     }
-  }, [msgId, glorySec, clearGloryMask]);
+  }, [nowSec]);
 
-  // Show the mask slightly before the end, or whenever the timer is latched
-  const latchPadStart =
-    gloryUntilRef.current > 0
-      ? Math.max(0, gloryUntilRef.current - (MASK_SECS + GLORY_MASK_LATCH_PAD))
-      : 0;
-  const latchedGloryMask =
-    gloryUntilRef.current > 0 && now >= latchPadStart && now < gloryUntilRef.current;
+  const showGloryMask =
+    gloryMaskUntilRef.current > 0 && nowSec < gloryMaskUntilRef.current;
+  const gloryMaskLeft = showGloryMask
+    ? Math.max(0, gloryMaskUntilRef.current - nowSec)
+    : 0;
 
-  const showGloryMask = latchedGloryMask;
-
-  // Remaining seconds come from the *target end*, never a max() of sources
-  const targetEnd =
-    glorySec > 0 ? now + glorySec + MASK_SECS : gloryUntilRef.current;
-  const gloryMaskLeft = showGloryMask ? Math.max(0, targetEnd - now) : 0;
-
-  // ========= MOD / NUKE MASKS =========
-  const NUKE_MASK_SECS = MASK_SECS;
-  const MOD_RETRIGGER_DEBOUNCE_SECS = Math.max(30, MASK_SECS + 5);
+  // ========= PART 2B: NUKE MASK LOGIC =========
   const nukeMaskUntilRef = React.useRef(0);
   const nukeMaskMessageIdRef = React.useRef<bigint>(0n);
-  const modMaskUntilRef = React.useRef(0);
-  const modMaskMessageIdRef = React.useRef<bigint>(0n);
-  const lastActiveMessageRef = React.useRef<{ id: bigint; message: any } | null>(null);
-  const [modFrozenMessage, setModFrozenMessage] =
-    React.useState<{ id: bigint; message: any } | null>(null);
-  const realtimeNukeIdRef = React.useRef<bigint>(0n);
-  const realtimeNukeSeenRef = React.useRef(false);
-  const modDisarmIdRef = React.useRef<bigint>(0n);
-  const modDisarmUntilRef = React.useRef<number>(0);
-  const isActiveRef = React.useRef<boolean>(false);
-  function disarmModFor(id: bigint, seconds: number) {
-    if (!id || id === 0n) return;
-    modDisarmIdRef.current = id;
-    modDisarmUntilRef.current = readChainNow() + Math.max(0, seconds);
-  }
-  function isModDisarmed(id: bigint) {
-    return !!id && id === modDisarmIdRef.current && now < modDisarmUntilRef.current;
-  }
-  React.useEffect(() => {
-    const persistedNuke = readMaskState(NUKE_MASK_KEY);
-    if (persistedNuke.until > nukeMaskUntilRef.current) {
-      nukeMaskUntilRef.current = persistedNuke.until;
-    }
-    if (persistedNuke.messageId) {
-      const stored = parseMaskMessageId(persistedNuke.messageId);
-      if (stored > 0n) {
-        nukeMaskMessageIdRef.current = stored;
-      }
-    }
-    const persistedMod = readMaskState(MOD_MASK_KEY);
-    if (persistedMod.until > modMaskUntilRef.current) {
-      modMaskUntilRef.current = persistedMod.until;
-    }
-    if (persistedMod.messageId) {
-      const stored = parseMaskMessageId(persistedMod.messageId);
-      if (stored > 0n) {
-        modMaskMessageIdRef.current = stored;
-      }
-    }
-  }, []);
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    const handler = (evt: Event) => {
-      const detail = (evt as CustomEvent<MaskEventDetail>).detail;
-      if (!detail || typeof detail.until !== "number") return;
-      const normalized = Number.isFinite(detail.until) ? Math.floor(detail.until) : 0;
-      const evtId = parseMaskMessageId(detail.messageId ?? undefined);
-      if (detail.key === MOD_MASK_KEY) {
-        if (normalized > 0) {
-          modMaskUntilRef.current = normalized;
-          if (evtId > 0n) {
-            modMaskMessageIdRef.current = evtId;
-          }
-        } else {
-          const prevId = modMaskMessageIdRef.current;
-          if (prevId && prevId !== 0n) {
-            // Always disarm so the next post won't echo the MOD mask.
-            disarmModFor(prevId, MOD_RETRIGGER_DEBOUNCE_SECS);
-          }
-          modMaskMessageIdRef.current = 0n;
-          setModFrozenMessage(null);
-          modMaskUntilRef.current = 0;
-        }
-      } else if (detail.key === NUKE_MASK_KEY) {
-        if (normalized > 0) {
-          nukeMaskUntilRef.current = normalized;
-          if (evtId > 0n) {
-            nukeMaskMessageIdRef.current = evtId;
-          }
-        } else {
-          nukeMaskMessageIdRef.current = 0n;
-          nukeMaskUntilRef.current = 0;
-        }
-      } else if (detail.key === GLORY_MASK_KEY) {
-        if (normalized > 0) {
-          gloryUntilRef.current = normalized;
-          if (evtId > 0n) {
-            gloryMaskMessageIdRef.current = evtId;
-          }
-        } else {
-          gloryMaskMessageIdRef.current = 0n;
-          gloryUntilRef.current = 0;
-        }
-      }
-    };
-    window.addEventListener(MASK_EVENT, handler as EventListener);
-    return () => window.removeEventListener(MASK_EVENT, handler as EventListener);
-  }, []);
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    function onStorage(e: StorageEvent) {
-      if (!e || !e.key) return;
-      if (![GLORY_MASK_KEY, NUKE_MASK_KEY, MOD_MASK_KEY].includes(e.key)) return;
+  const nukeMaskTriggeredRef = React.useRef(false);
 
-      try {
-        const parsed = e.newValue ? JSON.parse(e.newValue) : null;
-        const until = parsed?.until ? Math.floor(parsed.until) : 0;
-        const msgId = parseMaskMessageId(parsed?.messageId);
-
-        if (e.key === GLORY_MASK_KEY) {
-          gloryUntilRef.current = until;
-          gloryMaskMessageIdRef.current = msgId || 0n;
-        } else if (e.key === NUKE_MASK_KEY) {
-          nukeMaskUntilRef.current = until;
-          nukeMaskMessageIdRef.current = msgId || 0n;
-        } else if (e.key === MOD_MASK_KEY) {
-          modMaskUntilRef.current = until;
-          modMaskMessageIdRef.current = msgId || 0n;
-          if (until === 0) {
-            // Keep behavior consistent with in-tab clears
-            setModFrozenMessage(null);
-          }
-        }
-      } catch {
-        // ignore malformed payloads
-      }
-    }
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
   React.useEffect(() => {
-    if (modMaskUntilRef.current > 0 && now >= modMaskUntilRef.current) {
-      const prevId = modMaskMessageIdRef.current;
-      if (prevId && prevId !== 0n) {
-        // Always disarm on timer-based clear as well.
-        disarmModFor(prevId, MOD_RETRIGGER_DEBOUNCE_SECS);
+    const persisted = readMaskState(NUKE_MASK_KEY);
+    if (persisted.until > nowSec) {
+      nukeMaskUntilRef.current = persisted.until;
+      if (persisted.messageId) {
+        nukeMaskMessageIdRef.current = parseMaskMessageId(persisted.messageId);
       }
-      modMaskUntilRef.current = 0;
-      modMaskMessageIdRef.current = 0n;
-      writeMaskUntil(MOD_MASK_KEY, 0);
     }
-    if (nukeMaskUntilRef.current > 0 && now >= nukeMaskUntilRef.current) {
+  }, []);
+
+  React.useEffect(() => {
+    if (!hasActive || !currentMessage || !msgId || msgId === 0n) return;
+
+    const nuked = Boolean(
+      (currentMessage as any)?.nuked ?? (currentMessage as any)?.[11] ?? false
+    );
+
+    if (msgId && msgId !== nukeMaskMessageIdRef.current) {
+      nukeMaskTriggeredRef.current = false;
+    }
+
+    if (nuked && !nukeMaskTriggeredRef.current) {
+      const until = nowSec + MASK_DURATION_SECS;
+      nukeMaskUntilRef.current = until;
+      nukeMaskMessageIdRef.current = msgId;
+      nukeMaskTriggeredRef.current = true;
+
+      writeMaskUntil(NUKE_MASK_KEY, until, {
+        messageId: msgId,
+        type: "nuke",
+      });
+
+      gloryMaskUntilRef.current = 0;
+      writeMaskUntil(GLORY_MASK_KEY, 0);
+    }
+  }, [hasActive, currentMessage, msgId, nowSec]);
+
+  React.useEffect(() => {
+    if (nukeMaskUntilRef.current > 0 && nowSec >= nukeMaskUntilRef.current) {
       nukeMaskUntilRef.current = 0;
       nukeMaskMessageIdRef.current = 0n;
+      nukeMaskTriggeredRef.current = false;
       writeMaskUntil(NUKE_MASK_KEY, 0);
     }
-  }, [now, hasActive]);
+  }, [nowSec]);
+
+  const showNukeMask =
+    !showGloryMask && nukeMaskUntilRef.current > 0 && nowSec < nukeMaskUntilRef.current;
+  const nukeMaskLeft = showNukeMask
+    ? Math.max(0, nukeMaskUntilRef.current - nowSec)
+    : 0;
+
+  // ========= PART 2C: MOD MASK LOGIC =========
+  const modMaskUntilRef = React.useRef(0);
+  const modMaskMessageIdRef = React.useRef<bigint>(0n);
+  const modMaskTriggeredRef = React.useRef(false);
 
   React.useEffect(() => {
-    isActiveRef.current = hasActive;
-  }, [hasActive]);
+    const persisted = readMaskState(MOD_MASK_KEY);
+    if (persisted.until > nowSec) {
+      modMaskUntilRef.current = persisted.until;
+      if (persisted.messageId) {
+        modMaskMessageIdRef.current = parseMaskMessageId(persisted.messageId);
+      }
+      const last = lastActiveMessageRef.current;
+      if (last && last.id === modMaskMessageIdRef.current) {
+        setModFrozenMessage(last);
+      }
+    }
+  }, []);
+
   React.useEffect(() => {
     if (hasActive && msgId && msgId !== 0n && currentMessage) {
       lastActiveMessageRef.current = { id: msgId, message: { ...currentMessage } };
@@ -2287,330 +2223,95 @@ function ActiveCard() {
   }, [hasActive, msgId, currentMessage]);
 
   React.useEffect(() => {
-    if (!modFlaggedLive) return;
-    if (!latchedModId || latchedModId === 0n) return;
-    if (masksSuppressed(MOD_MASK_KEY)) return;
-    // Respect disarm regardless of active/inactive state.
-    if (isModDisarmed(latchedModId)) return;
+    if (!modFlaggedLive || !latchedModId || latchedModId === 0n) return;
 
-    const until = readChainNow() + NUKE_MASK_SECS;
-    if (until > modMaskUntilRef.current) {
+    if (latchedModId && latchedModId !== modMaskMessageIdRef.current) {
+      modMaskTriggeredRef.current = false;
+    }
+
+    if (!modMaskTriggeredRef.current) {
+      const until = nowSec + MASK_DURATION_SECS;
       modMaskUntilRef.current = until;
-      writeMaskUntil(MOD_MASK_KEY, until, { messageId: latchedModId });
-    }
-    modMaskMessageIdRef.current = latchedModId;
-    clearGloryMask();
+      modMaskMessageIdRef.current = latchedModId;
+      modMaskTriggeredRef.current = true;
 
-    let latched = lastActiveMessageRef.current;
-    if (hasActive && msgId && msgId !== 0n && currentMessage && msgId === latchedModId) {
-      latched = { id: msgId, message: { ...(currentMessage as any) } };
-    }
-    if (latched) {
-      setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
-    }
-  }, [
-    hasActive,
-    currentMessage,
-    latchedModId,
-    modFlaggedLive,
-    msgId,
-    NUKE_MASK_SECS,
-    clearGloryMask,
-  ]);
-  React.useEffect(() => {
-    if (hasActive) setModFrozenMessage(null);
-  }, [hasActive]);
-  const lastShownIdRef = React.useRef<bigint>(0n);
-  const hadActiveRef = React.useRef<boolean>(false);
+      writeMaskUntil(MOD_MASK_KEY, until, {
+        messageId: latchedModId,
+        type: "mod",
+      });
 
-  React.useEffect(() => {
-    if (!hasActive || !currentMessage || !publicClient || !msgId || msgId === 0n) {
-      if (realtimeNukeSeenRef.current && msgId && msgId !== realtimeNukeIdRef.current) {
-        realtimeNukeSeenRef.current = false;
-        realtimeNukeIdRef.current = msgId ?? 0n;
-      }
-      return;
-    }
-
-    const nuked = Boolean(
-      (currentMessage as any)?.nuked ?? (currentMessage as any)?.[11] ?? false
-    );
-    if (!nuked) {
-      realtimeNukeSeenRef.current = false;
-      realtimeNukeIdRef.current = msgId;
-      return;
-    }
-
-    if (realtimeNukeSeenRef.current && realtimeNukeIdRef.current === msgId) return;
-    if (masksSuppressed(NUKE_MASK_KEY)) return;
-    realtimeNukeSeenRef.current = true;
-    realtimeNukeIdRef.current = msgId;
-
-    let cancelled = false;
-
-    (async () => {
-      let flagged = false;
-      try {
-        flagged = (await withRetry(
-          () =>
-            publicClient.readContract({
-              address: GAME as `0x${string}`,
-              abi: GAME_ABI,
-              functionName: "modFlagged",
-              args: [msgId],
-            }) as Promise<boolean>,
-          2,
-          200
-        )) as boolean;
-      } catch {
-        flagged = false;
-      }
-      if (cancelled) return;
-      if (masksSuppressed(flagged ? MOD_MASK_KEY : NUKE_MASK_KEY)) return;
-
-      const until = readChainNow() + NUKE_MASK_SECS;
-      if (flagged) {
-        if (until > modMaskUntilRef.current) {
-          modMaskUntilRef.current = until;
-          writeMaskUntil(MOD_MASK_KEY, until, { messageId: msgId });
-        }
-        if (msgId && msgId !== 0n) {
-          modMaskMessageIdRef.current = msgId;
-        }
-        const latched =
-          lastActiveMessageRef.current || {
-            id: msgId,
-            message: { ...(currentMessage as any) },
-          };
+      const latched = lastActiveMessageRef.current;
+      if (latched && latched.id === latchedModId) {
         setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
-      } else if (until > nukeMaskUntilRef.current) {
-        nukeMaskUntilRef.current = until;
-        nukeMaskMessageIdRef.current = msgId ?? 0n;
-        writeMaskUntil(NUKE_MASK_KEY, until, { messageId: msgId });
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [hasActive, currentMessage, msgId, publicClient, NUKE_MASK_SECS]);
-
-  async function probeResolution(idToCheck: bigint) {
-    if (masksSuppressed()) return;
-    try {
-      const client = publicClient;
-      if (!client) return;
-      let flagged = false;
-      try {
-        flagged = (await withRetry(
-          () =>
-            client.readContract({
-              address: GAME as `0x${string}`,
-              abi: GAME_ABI,
-              functionName: "modFlagged",
-              args: [idToCheck],
-            }) as Promise<boolean>,
-          2,
-          200
-        )) as boolean;
-      } catch {
-        flagged = false;
       }
 
-      if (masksSuppressed()) return;
-      let mFinal: any = null;
-      try {
-        mFinal = await withRetry(
-          () =>
-            client.readContract({
-              address: GAME as `0x${string}`,
-              abi: GAME_ABI,
-              functionName: "messages",
-              args: [idToCheck],
-            }) as Promise<any>,
-          2,
-          200
-        );
-      } catch {
-        mFinal = null;
-      }
-
-      const nuked = Boolean(mFinal?.nuked ?? mFinal?.[11] ?? false);
-
-      const nowChain = readChainNow();
-      const startTimeNum = Number(mFinal?.startTime ?? mFinal?.[3] ?? 0n);
-      const baseWindow = Number(mFinal?.B0 ?? mFinal?.[4] ?? 0n);
-      const freezeAnchor =
-        startTimeNum > 0 && baseWindow > 0 ? startTimeNum + baseWindow : 0;
-      const chainFreezeUntil =
-        freezeAnchor > 0 ? freezeAnchor + NUKE_MASK_SECS : 0;
-
-      if (chainFreezeUntil > 0 && chainFreezeUntil <= nowChain) {
-        if (flagged) {
-          modMaskUntilRef.current = 0;
-          modMaskMessageIdRef.current = 0n;
-          writeMaskUntil(MOD_MASK_KEY, 0);
-          setModFrozenMessage(null);
-        } else {
-          nukeMaskUntilRef.current = 0;
-          nukeMaskMessageIdRef.current = 0n;
-          writeMaskUntil(NUKE_MASK_KEY, 0);
-        }
-        clearGloryMask();
-        return;
-      }
-
-      const fallbackUntil = nowChain + NUKE_MASK_SECS;
-      const until =
-        chainFreezeUntil > 0 ? Math.min(chainFreezeUntil, fallbackUntil) : fallbackUntil;
-
-      if (flagged) {
-        // Respect disarm even if a new post is already active.
-        if (isModDisarmed(idToCheck)) return;
-        if (masksSuppressed(MOD_MASK_KEY)) return;
-        if (until > modMaskUntilRef.current) {
-          modMaskUntilRef.current = until;
-          writeMaskUntil(MOD_MASK_KEY, until, { messageId: idToCheck });
-        }
-        if (idToCheck && idToCheck !== 0n) {
-          modMaskMessageIdRef.current = idToCheck;
-        }
-        let latched = lastActiveMessageRef.current;
-        if (!latched || latched.id !== idToCheck) {
-          if (mFinal) {
-            latched = { id: idToCheck, message: { ...mFinal } };
-          }
-        }
-        if (latched) {
-          setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
-        }
-        clearGloryMask();
-        return;
-      }
-
-      if (!nuked) return;
-
-      if (masksSuppressed(NUKE_MASK_KEY)) return;
-      if (until > nukeMaskUntilRef.current) {
-        nukeMaskUntilRef.current = until;
-        nukeMaskMessageIdRef.current = idToCheck ?? 0n;
-        writeMaskUntil(NUKE_MASK_KEY, until, { messageId: idToCheck });
-      }
-      clearGloryMask();
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const coldProbeStampRef = React.useRef<number>(0);
-  React.useEffect(() => {
-    if (hasActive) return;
-    const client = publicClient;
-    if (!client) return;
-    const nowChain = readChainNow();
-    if (nowChain > 0 && nowChain - coldProbeStampRef.current < 2) return;
-    coldProbeStampRef.current = nowChain;
-    let cancelled = false;
-    (async () => {
-      try {
-        const latestId = (await withRetry(
-          () =>
-            client.readContract({
-              address: GAME as `0x${string}`,
-              abi: GAME_ABI,
-              functionName: "nextMessageId",
-            }) as Promise<bigint>,
-          2,
-          200,
-        )) as bigint;
-        if (cancelled) return;
-        const candidates = new Set<bigint>();
-        if (latestId && latestId > 0n) {
-          candidates.add(latestId - 1n);
-        }
-        if (lastShownIdRef.current && lastShownIdRef.current > 0n) {
-          candidates.add(lastShownIdRef.current);
-        }
-        if (modMaskMessageIdRef.current && modMaskMessageIdRef.current > 0n) {
-          candidates.add(modMaskMessageIdRef.current);
-        }
-        if (nukeMaskMessageIdRef.current && nukeMaskMessageIdRef.current > 0n) {
-          candidates.add(nukeMaskMessageIdRef.current);
-        }
-        for (const id of candidates) {
-          if (cancelled) break;
-          if (!id || id <= 0n) continue;
-          await probeResolution(id);
-        }
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [hasActive, publicClient]);
-
-  React.useEffect(() => {
-    if (!hasActive || !currentMessage || !msgId || msgId === 0n) return;
-    const nuked = Boolean(
-      (currentMessage as any)?.nuked ?? (currentMessage as any)?.[11] ?? false
-    );
-    if (!nuked && nukeMaskMessageIdRef.current && nukeMaskMessageIdRef.current !== msgId) {
+      gloryMaskUntilRef.current = 0;
       nukeMaskUntilRef.current = 0;
-      nukeMaskMessageIdRef.current = 0n;
+      writeMaskUntil(GLORY_MASK_KEY, 0);
       writeMaskUntil(NUKE_MASK_KEY, 0);
     }
-  }, [hasActive, currentMessage, msgId]);
+  }, [modFlaggedLive, latchedModId, nowSec]);
 
   React.useEffect(() => {
-    if (!hasActive || !msgId || msgId === 0n) return;
-    if (modFlaggedLive && latchedModId === msgId) {
-      modMaskMessageIdRef.current = msgId;
-      return;
-    }
-    if (modMaskMessageIdRef.current && modMaskMessageIdRef.current !== msgId) {
+    if (modMaskUntilRef.current > 0 && nowSec >= modMaskUntilRef.current) {
       modMaskUntilRef.current = 0;
       modMaskMessageIdRef.current = 0n;
-      writeMaskUntil(MOD_MASK_KEY, 0);
+      modMaskTriggeredRef.current = false;
       setModFrozenMessage(null);
+      writeMaskUntil(MOD_MASK_KEY, 0);
     }
-  }, [hasActive, latchedModId, modFlaggedLive, msgId]);
+  }, [nowSec]);
+
+  const showModMask =
+    modMaskUntilRef.current > 0 && nowSec < modMaskUntilRef.current;
+  const modMaskLeft = showModMask
+    ? Math.max(0, modMaskUntilRef.current - nowSec)
+    : 0;
+
+  // ========= PART 2D: MASK SUPPRESSION FOR NEW POSTS =========
+  const maskSuppressionUntilRef = React.useRef(0);
+  const latestNowSecRef = React.useRef(nowSec);
 
   React.useEffect(() => {
-    const wasActive = hadActiveRef.current;
-    if (hasActive && msgId && msgId !== 0n) {
-      lastShownIdRef.current = msgId;
+    latestNowSecRef.current = nowSec;
+    if (maskSuppressionUntilRef.current > 0 && nowSec >= maskSuppressionUntilRef.current) {
+      maskSuppressionUntilRef.current = 0;
     }
-    if (wasActive && !hasActive) {
-      if (masksSuppressed()) {
-        hadActiveRef.current = hasActive;
-        return;
+  }, [nowSec]);
+
+  const applyMaskSuppression = React.useCallback((seconds: number) => {
+    const clamped = Math.max(0, Math.floor(seconds));
+    if (clamped <= 0) return;
+    const base = latestNowSecRef.current;
+    maskSuppressionUntilRef.current = Math.max(
+      maskSuppressionUntilRef.current,
+      base + clamped
+    );
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handler = (evt: Event) => {
+      const detail = (evt as CustomEvent<MaskSuppressEventDetail>).detail;
+      const seconds = Number(detail?.seconds ?? 0);
+      if (Number.isFinite(seconds)) {
+        applyMaskSuppression(seconds);
       }
-      const idToCheck = lastShownIdRef.current || msgId;
-      if (idToCheck && idToCheck !== 0n) probeResolution(idToCheck);
-    }
-    hadActiveRef.current = hasActive;
-  }, [msgId, hasActive, publicClient, NUKE_MASK_SECS]);
+    };
+    window.addEventListener(MASK_SUPPRESS_EVENT, handler as EventListener);
+    return () => window.removeEventListener(MASK_SUPPRESS_EVENT, handler as EventListener);
+  }, [applyMaskSuppression]);
 
-  const showModMask = now < modMaskUntilRef.current;
-  const showNukeMask = !showModMask && now < nukeMaskUntilRef.current;
-  const modMaskLeft = showModMask ? modMaskUntilRef.current - now : 0;
-  const nukeMaskLeft = showNukeMask ? nukeMaskUntilRef.current - now : 0;
-  React.useEffect(() => {
-    if (!showModMask) setModFrozenMessage(null);
-  }, [showModMask]);
+  const masksSuppressed =
+    maskSuppressionUntilRef.current > 0 && nowSec < maskSuppressionUntilRef.current;
 
-  React.useEffect(() => {
-    if (showModMask || showNukeMask) {
-      clearGloryMask();
-    }
-  }, [showModMask, showNukeMask, clearGloryMask]);
+  const effectiveShowGloryMask = showGloryMask && !masksSuppressed;
+  const effectiveShowNukeMask = showNukeMask && !masksSuppressed;
+  const effectiveShowModMask = showModMask && !masksSuppressed;
 
-  const showingModeratedFreeze = Boolean(!hasActive && showModMask && modFrozenMessage);
+  const showingModeratedFreeze = Boolean(!hasActive && effectiveShowModMask && modFrozenMessage);
   const displayMsgId = showingModeratedFreeze ? (modFrozenMessage!.id ?? 0n) : msgId;
   const messageForUi = showingModeratedFreeze ? modFrozenMessage!.message : currentMessage;
-
   async function confirmThenRefresh(hash?: `0x${string}`) {
     try {
       if (hash && publicClient) {
@@ -2855,21 +2556,21 @@ function ActiveCard() {
   return (
     <div className="flex flex-col gap-3 items-stretch">
       {/* overlays */}
-      {showModMask && (
+      {effectiveShowModMask && (
         <FinalizingMask
           secondsLeft={modMaskLeft}
           imgUrl="/overlays/moderated.png"
           message="The message has been canceled for violation of our policies"
         />
       )}
-      {!showModMask && showNukeMask && (
+      {!effectiveShowModMask && effectiveShowNukeMask && (
         <FinalizingMask
           secondsLeft={nukeMaskLeft}
           imgUrl="/overlays/nuked.png"
           message="Too many dislikes! The message has been nuked"
         />
       )}
-      {!showModMask && !showNukeMask && showGloryMask && (
+      {!effectiveShowModMask && !effectiveShowNukeMask && effectiveShowGloryMask && (
         <FinalizingMask secondsLeft={gloryMaskLeft} imgUrl="/overlays/finalizing.png" />
       )}
 
