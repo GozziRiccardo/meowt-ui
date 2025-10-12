@@ -1433,8 +1433,11 @@ function useGameSnapshot() {
   const resolvedFlag = Boolean((m as any)?.resolved ?? (m as any)?.[10]);
   const nukedFlag = Boolean((m as any)?.nuked ?? (m as any)?.[11]);
 
-  const inGlory = exposureLeft === 0 && gloryEndRef.current > nowSec;
-  const gloryLeft = inGlory ? gloryEndRef.current - nowSec : 0;
+  const hasExposureEnd = exposureEndRef.current > 0;
+  const gloryLeftRaw = Math.max(0, gloryEndRef.current - nowSec);
+  const inGlory =
+    hasExposureEnd && gloryLeftRaw > 0 && nowSec >= exposureEndRef.current && gloryEndRef.current > nowSec;
+  const gloryLeft = inGlory ? gloryLeftRaw : 0;
 
   let lockKind: "boost" | "glory" | "immunity" | "none" = "none";
   let lockLeft = 0;
@@ -1542,7 +1545,8 @@ function useGameSnapshot() {
     show: effectiveShow,
     m,
     rem: BigInt(remSec),
-    gloryRem: inGlory ? gloryLeft : 0,
+    gloryRem: gloryLeft,
+    now: nowSec,
     feeLike,
     feeDislike,
     boostCost: boostCostRef.current,
@@ -2012,12 +2016,7 @@ function ActiveCard() {
   const remSec = Number((snap as any)?.rem ?? 0n);
   const glorySec = Number((snap as any)?.gloryRem ?? 0);
   const MASK_SECS = Number((snap as any)?.winFreeze ?? 11);
-
-  const [now, setNow] = React.useState(() => Math.floor(Date.now() / 1000));
-  React.useEffect(() => {
-    const iv = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 500);
-    return () => clearInterval(iv);
-  }, []);
+  const now = Number((snap as any)?.now ?? Math.floor(Date.now() / 1000));
 
   // ========= POST-GLORY FREEZE MASK (clamped & de-flickered) =========
   const GLORY_MAX_SPAN =
@@ -2025,6 +2024,7 @@ function ActiveCard() {
 
   const gloryUntilRef = React.useRef(0);
   const gloryMaskMessageIdRef = React.useRef<bigint>(0n);
+  const lastMsgIdRef = React.useRef<bigint>(0n);
 
   // Clamp any persisted "until" so it can't be wildly in the future
   React.useEffect(() => {
@@ -2076,6 +2076,21 @@ function ActiveCard() {
       writeMaskUntil(GLORY_MASK_KEY, 0);
     }
   }, [glorySec, now, MASK_SECS, msgId]);
+
+  React.useEffect(() => {
+    if (msgId && msgId !== 0n) {
+      const changed = lastMsgIdRef.current !== msgId;
+      lastMsgIdRef.current = msgId;
+      if (changed && glorySec <= 0 && gloryUntilRef.current > 0) {
+        // Message rolled over while we're in immunity — scrub any lingering mask
+        gloryUntilRef.current = 0;
+        gloryMaskMessageIdRef.current = 0n;
+        writeMaskUntil(GLORY_MASK_KEY, 0);
+      }
+    } else if (!msgId || msgId === 0n) {
+      lastMsgIdRef.current = 0n;
+    }
+  }, [msgId, glorySec]);
 
   // Show the mask slightly before the end, or whenever the timer is latched
   const latchPadStart =
