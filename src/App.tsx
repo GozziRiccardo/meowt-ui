@@ -2052,6 +2052,13 @@ function ActiveCard() {
   const gloryMaskMessageIdRef = React.useRef<bigint>(0n);
   const lastMsgIdRef = React.useRef<bigint>(0n);
 
+  const clearGloryMask = React.useCallback(() => {
+    if (gloryUntilRef.current <= 0 && gloryMaskMessageIdRef.current === 0n) return;
+    gloryUntilRef.current = 0;
+    gloryMaskMessageIdRef.current = 0n;
+    writeMaskUntil(GLORY_MASK_KEY, 0);
+  }, []);
+
   // Clamp any persisted "until" so it can't be wildly in the future
   React.useEffect(() => {
     const nowSec = readChainNow();
@@ -2092,16 +2099,12 @@ function ActiveCard() {
       gloryMaskMessageIdRef.current !== msgId
     ) {
       // New message → drop any old latched glory mask
-      gloryUntilRef.current = 0;
-      gloryMaskMessageIdRef.current = 0n;
-      writeMaskUntil(GLORY_MASK_KEY, 0);
+      clearGloryMask();
     } else if (gloryUntilRef.current > 0 && now >= gloryUntilRef.current) {
       // Timer naturally ended
-      gloryUntilRef.current = 0;
-      gloryMaskMessageIdRef.current = 0n;
-      writeMaskUntil(GLORY_MASK_KEY, 0);
+      clearGloryMask();
     }
-  }, [glorySec, now, MASK_SECS, msgId]);
+  }, [glorySec, now, MASK_SECS, msgId, clearGloryMask]);
 
   React.useEffect(() => {
     if (msgId && msgId !== 0n) {
@@ -2109,14 +2112,12 @@ function ActiveCard() {
       lastMsgIdRef.current = msgId;
       if (changed && glorySec <= 0 && gloryUntilRef.current > 0) {
         // Message rolled over while we're in immunity — scrub any lingering mask
-        gloryUntilRef.current = 0;
-        gloryMaskMessageIdRef.current = 0n;
-        writeMaskUntil(GLORY_MASK_KEY, 0);
+        clearGloryMask();
       }
     } else if (!msgId || msgId === 0n) {
       lastMsgIdRef.current = 0n;
     }
-  }, [msgId, glorySec]);
+  }, [msgId, glorySec, clearGloryMask]);
 
   // Show the mask slightly before the end, or whenever the timer is latched
   const latchPadStart =
@@ -2298,6 +2299,7 @@ function ActiveCard() {
       writeMaskUntil(MOD_MASK_KEY, until, { messageId: latchedModId });
     }
     modMaskMessageIdRef.current = latchedModId;
+    clearGloryMask();
 
     let latched = lastActiveMessageRef.current;
     if (hasActive && msgId && msgId !== 0n && currentMessage && msgId === latchedModId) {
@@ -2306,7 +2308,15 @@ function ActiveCard() {
     if (latched) {
       setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
     }
-  }, [hasActive, currentMessage, latchedModId, modFlaggedLive, msgId, NUKE_MASK_SECS]);
+  }, [
+    hasActive,
+    currentMessage,
+    latchedModId,
+    modFlaggedLive,
+    msgId,
+    NUKE_MASK_SECS,
+    clearGloryMask,
+  ]);
   React.useEffect(() => {
     if (hasActive) setModFrozenMessage(null);
   }, [hasActive]);
@@ -2446,10 +2456,13 @@ function ActiveCard() {
           nukeMaskMessageIdRef.current = 0n;
           writeMaskUntil(NUKE_MASK_KEY, 0);
         }
+        clearGloryMask();
         return;
       }
 
-      const until = chainFreezeUntil > 0 ? chainFreezeUntil : nowChain + NUKE_MASK_SECS;
+      const fallbackUntil = nowChain + NUKE_MASK_SECS;
+      const until =
+        chainFreezeUntil > 0 ? Math.min(chainFreezeUntil, fallbackUntil) : fallbackUntil;
 
       if (flagged) {
         // Respect disarm even if a new post is already active.
@@ -2471,6 +2484,7 @@ function ActiveCard() {
         if (latched) {
           setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
         }
+        clearGloryMask();
         return;
       }
 
@@ -2482,6 +2496,7 @@ function ActiveCard() {
         nukeMaskMessageIdRef.current = idToCheck ?? 0n;
         writeMaskUntil(NUKE_MASK_KEY, until, { messageId: idToCheck });
       }
+      clearGloryMask();
     } catch {
       /* ignore */
     }
@@ -2585,6 +2600,12 @@ function ActiveCard() {
   React.useEffect(() => {
     if (!showModMask) setModFrozenMessage(null);
   }, [showModMask]);
+
+  React.useEffect(() => {
+    if (showModMask || showNukeMask) {
+      clearGloryMask();
+    }
+  }, [showModMask, showNukeMask, clearGloryMask]);
 
   const showingModeratedFreeze = Boolean(!hasActive && showModMask && modFrozenMessage);
   const displayMsgId = showingModeratedFreeze ? (modFrozenMessage!.id ?? 0n) : msgId;
