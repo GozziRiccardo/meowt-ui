@@ -30,7 +30,13 @@ import {
 } from "@tanstack/react-query";
 import { keccak256, toBytes, parseUnits } from "viem";
 import { useSafeWeb3Modal } from "./lib/useSafeWeb3Modal";
-import { watchAccount, watchChainId, getAccount, reconnect } from "wagmi/actions";
+import {
+  watchAccount,
+  watchChainId,
+  getAccount,
+  reconnect,
+  getPublicClient,
+} from "wagmi/actions";
 
 // at the top of App.tsx
 import { RewardsHeaderButton, RewardsDock } from "./rewardsAuto";
@@ -1447,7 +1453,7 @@ function useGameSnapshot() {
   const replaceLocked = Boolean(replaceBlocked) || lockLeft > 0;
 
   // Proof-of-life and definitely-over guards
-  const publicClient = usePublicClient();
+  const publicClient = useStablePublicClient();
 
   const [idConfirmOk, setIdConfirmOk] = React.useState<bigint | 0n>(0n);
   React.useEffect(() => {
@@ -1569,6 +1575,17 @@ function useUiConnected(): boolean {
   const { status, address } = useAccount();
   return status === "connected" && !!address;
 }
+function useStablePublicClient() {
+  const clientFromHook = usePublicClient();
+  const fallbackClient = React.useMemo(() => {
+    try {
+      return getPublicClient(wagmiConfig, { chainId: TARGET_CHAIN.id });
+    } catch {
+      return null;
+    }
+  }, []);
+  return clientFromHook ?? fallbackClient;
+}
 function useLiveChainId() {
   const wagmiChainId = useChainId();
   const onTarget = wagmiChainId === TARGET_CHAIN.id;
@@ -1597,7 +1614,7 @@ function PostBoxInner() {
   const [posting, setPosting] = React.useState(false);
 
   const { writeContractAsync } = useWriteContract();
-  const publicClient = usePublicClient();
+  const publicClient = useStablePublicClient();
   const qc = useQueryClient();
   const [toast, setToast] = React.useState("");
   const { setQuiet } = useQuiet();
@@ -1752,7 +1769,7 @@ function ReplaceBoxInner() {
 
   const { address } = useAccount();
   const { writeContractAsync } = useWriteContract();
-  const publicClient = usePublicClient();
+  const publicClient = useStablePublicClient();
   const qc = useQueryClient();
   const [toast, setToast] = React.useState("");
   const { setQuiet } = useQuiet();
@@ -1954,7 +1971,7 @@ function ActiveCard() {
   const isConnected = useUiConnected();
   const { address } = useAccount();
   const { writeContractAsync } = useWriteContract();
-  const publicClient = usePublicClient();
+  const publicClient = useStablePublicClient();
   const qc = useQueryClient();
 
   const [toast, setToast] = React.useState("");
@@ -2354,11 +2371,13 @@ function ActiveCard() {
   async function probeResolution(idToCheck: bigint) {
     if (masksSuppressed()) return;
     try {
+      const client = publicClient;
+      if (!client) return;
       let flagged = false;
       try {
         flagged = (await withRetry(
           () =>
-            publicClient!.readContract({
+            client.readContract({
               address: GAME as `0x${string}`,
               abi: GAME_ABI,
               functionName: "modFlagged",
@@ -2376,7 +2395,7 @@ function ActiveCard() {
       try {
         mFinal = await withRetry(
           () =>
-            publicClient!.readContract({
+            client.readContract({
               address: GAME as `0x${string}`,
               abi: GAME_ABI,
               functionName: "messages",
@@ -2390,7 +2409,30 @@ function ActiveCard() {
       }
 
       const nuked = Boolean(mFinal?.nuked ?? mFinal?.[11] ?? false);
-      const until = readChainNow() + NUKE_MASK_SECS;
+
+      const nowChain = readChainNow();
+      const startTimeNum = Number(mFinal?.startTime ?? mFinal?.[3] ?? 0n);
+      const baseWindow = Number(mFinal?.B0 ?? mFinal?.[4] ?? 0n);
+      const freezeAnchor =
+        startTimeNum > 0 && baseWindow > 0 ? startTimeNum + baseWindow : 0;
+      const chainFreezeUntil =
+        freezeAnchor > 0 ? freezeAnchor + NUKE_MASK_SECS : 0;
+
+      if (chainFreezeUntil > 0 && chainFreezeUntil <= nowChain) {
+        if (flagged) {
+          modMaskUntilRef.current = 0;
+          modMaskMessageIdRef.current = 0n;
+          writeMaskUntil(MOD_MASK_KEY, 0);
+          setModFrozenMessage(null);
+        } else {
+          nukeMaskUntilRef.current = 0;
+          nukeMaskMessageIdRef.current = 0n;
+          writeMaskUntil(NUKE_MASK_KEY, 0);
+        }
+        return;
+      }
+
+      const until = chainFreezeUntil > 0 ? chainFreezeUntil : nowChain + NUKE_MASK_SECS;
 
       if (flagged) {
         // Respect disarm even if a new post is already active.
@@ -2427,6 +2469,55 @@ function ActiveCard() {
       /* ignore */
     }
   }
+
+  const coldProbeStampRef = React.useRef<number>(0);
+  React.useEffect(() => {
+    if (hasActive) return;
+    const client = publicClient;
+    if (!client) return;
+    const nowChain = readChainNow();
+    if (nowChain > 0 && nowChain - coldProbeStampRef.current < 2) return;
+    coldProbeStampRef.current = nowChain;
+    let cancelled = false;
+    (async () => {
+      try {
+        const latestId = (await withRetry(
+          () =>
+            client.readContract({
+              address: GAME as `0x${string}`,
+              abi: GAME_ABI,
+              functionName: "nextMessageId",
+            }) as Promise<bigint>,
+          2,
+          200,
+        )) as bigint;
+        if (cancelled) return;
+        const candidates = new Set<bigint>();
+        if (latestId && latestId > 0n) {
+          candidates.add(latestId - 1n);
+        }
+        if (lastShownIdRef.current && lastShownIdRef.current > 0n) {
+          candidates.add(lastShownIdRef.current);
+        }
+        if (modMaskMessageIdRef.current && modMaskMessageIdRef.current > 0n) {
+          candidates.add(modMaskMessageIdRef.current);
+        }
+        if (nukeMaskMessageIdRef.current && nukeMaskMessageIdRef.current > 0n) {
+          candidates.add(nukeMaskMessageIdRef.current);
+        }
+        for (const id of candidates) {
+          if (cancelled) break;
+          if (!id || id <= 0n) continue;
+          await probeResolution(id);
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasActive, publicClient]);
 
   React.useEffect(() => {
     if (!hasActive || !currentMessage || !msgId || msgId === 0n) return;
@@ -2485,8 +2576,9 @@ function ActiveCard() {
   async function confirmThenRefresh(hash?: `0x${string}`) {
     try {
       if (hash && publicClient) {
+        const client = publicClient;
         const r = await withRetry(
-          () => publicClient!.waitForTransactionReceipt({ hash }),
+          () => client.waitForTransactionReceipt({ hash }),
           3,
           300
         );
