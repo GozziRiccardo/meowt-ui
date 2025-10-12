@@ -1200,7 +1200,7 @@ function useGameSnapshot() {
   const idBig = hasId ? (id as bigint) : 0n;
 
   // -------- Batched reads --------
-  const { data: raw } = useReadContracts({
+  const { data: raw, isFetching: rawFetching } = useReadContracts({
     allowFailure: true,
     contracts: hasId
       ? [
