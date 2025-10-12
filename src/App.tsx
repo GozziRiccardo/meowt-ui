@@ -2888,6 +2888,31 @@ function AddMeowtButtonInner() {
   const { open } = useSafeWeb3Modal();
   const { data: walletClient } = useWalletClient();
   const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => {
+    if (!busy) return;
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+
+    const reset = () => {
+      if (document.visibilityState && document.visibilityState !== "visible") {
+        return;
+      }
+      setBusy(false);
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        reset();
+      }
+    };
+
+    window.addEventListener("focus", reset);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      window.removeEventListener("focus", reset);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [busy]);
   const addToken = React.useCallback(async () => {
     setBusy(true);
     try {
