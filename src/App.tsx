@@ -1920,7 +1920,7 @@ function ReplaceBoxInner() {
 const GLORY_MASK_KEY = "meowt:mask:glory";
 const NUKE_MASK_KEY = "meowt:mask:nuke";
 const MOD_MASK_KEY = "meowt:mask:mod";
-const GLORY_MASK_LATCH_PAD = 2; // seconds before glory ends to begin masking
+const GLORY_MASK_LATCH_PAD = 0; // start mask exactly when glory hits zero
 
 let maskSuppressionUntil = 0;
 let suppressedMaskTypes = new Set<string>();
@@ -2082,11 +2082,10 @@ function ActiveCard() {
     gloryUntilRef.current > 0
       ? Math.max(0, gloryUntilRef.current - (MASK_SECS + GLORY_MASK_LATCH_PAD))
       : 0;
-  const gloryEndingSoon = glorySec > 0 && glorySec <= GLORY_MASK_LATCH_PAD;
   const latchedGloryMask =
     gloryUntilRef.current > 0 && now >= latchPadStart && now < gloryUntilRef.current;
 
-  const showGloryMask = gloryEndingSoon || latchedGloryMask;
+  const showGloryMask = latchedGloryMask;
 
   // Remaining seconds come from the *target end*, never a max() of sources
   const targetEnd =
@@ -2095,7 +2094,7 @@ function ActiveCard() {
 
   // ========= MOD / NUKE MASKS =========
   const NUKE_MASK_SECS = MASK_SECS;
-  const MOD_RETRIGGER_DEBOUNCE_SECS = 30;
+  const MOD_RETRIGGER_DEBOUNCE_SECS = Math.max(30, MASK_SECS + 5);
   const nukeMaskUntilRef = React.useRef(0);
   const nukeMaskMessageIdRef = React.useRef<bigint>(0n);
   const modMaskUntilRef = React.useRef(0);
@@ -2185,6 +2184,38 @@ function ActiveCard() {
     };
     window.addEventListener(MASK_EVENT, handler as EventListener);
     return () => window.removeEventListener(MASK_EVENT, handler as EventListener);
+  }, []);
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    function onStorage(e: StorageEvent) {
+      if (!e || !e.key) return;
+      if (![GLORY_MASK_KEY, NUKE_MASK_KEY, MOD_MASK_KEY].includes(e.key)) return;
+
+      try {
+        const parsed = e.newValue ? JSON.parse(e.newValue) : null;
+        const until = parsed?.until ? Math.floor(parsed.until) : 0;
+        const msgId = parseMaskMessageId(parsed?.messageId);
+
+        if (e.key === GLORY_MASK_KEY) {
+          gloryUntilRef.current = until;
+          gloryMaskMessageIdRef.current = msgId || 0n;
+        } else if (e.key === NUKE_MASK_KEY) {
+          nukeMaskUntilRef.current = until;
+          nukeMaskMessageIdRef.current = msgId || 0n;
+        } else if (e.key === MOD_MASK_KEY) {
+          modMaskUntilRef.current = until;
+          modMaskMessageIdRef.current = msgId || 0n;
+          if (until === 0) {
+            // Keep behavior consistent with in-tab clears
+            setModFrozenMessage(null);
+          }
+        }
+      } catch {
+        // ignore malformed payloads
+      }
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
   React.useEffect(() => {
     if (modMaskUntilRef.current > 0 && now >= modMaskUntilRef.current) {
