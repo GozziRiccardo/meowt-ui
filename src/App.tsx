@@ -3006,10 +3006,12 @@ function ConnectControls() {
         const params = { connector, chainId: TARGET_CHAIN.id } as const;
 
         const attempt = async (): Promise<void> => {
+          const startedAt = Date.now();
           try {
             await connectAsync(params);
           } catch (error) {
             const message = extractErrorMessage(error);
+            const elapsedMs = Date.now() - startedAt;
 
             if (
               isWalletConnectConnector(connector) &&
@@ -3023,6 +3025,23 @@ function ConnectControls() {
               } catch (resetError) {
                 console.warn('[connect] WalletConnect reset cleanup failed:', resetError);
               }
+              return attempt();
+            }
+
+            if (
+              isWalletConnectConnector(connector) &&
+              /user rejected/i.test(message) &&
+              elapsedMs < 1_200 &&
+              rejectedRetries < 1
+            ) {
+              rejectedRetries += 1;
+              console.warn('[connect] WalletConnect phantom rejection detected, retrying');
+              try {
+                await connector.disconnect?.();
+              } catch (phantomError) {
+                console.warn('[connect] WalletConnect phantom cleanup failed:', phantomError);
+              }
+              await sleep(400);
               return attempt();
             }
 
