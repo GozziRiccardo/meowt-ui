@@ -14,6 +14,7 @@ import {
 } from "wagmi";
 import type { Address } from "viem";
 import { GAME, GAME_ABI } from "./abi";
+import { readChainNowMs } from "./lib/chainTime";
 
 /* ----------------------------- small utilities ----------------------------- */
 
@@ -509,7 +510,7 @@ function useAutoPokeResolve() {
       if (gloryRem == null || gloryRem > 0n) return; // still in glory
 
       // throttle pokes
-      const now = Date.now();
+      const now = readChainNowMs();
       if (now - lastPokeMsRef.current < 15000) return;
 
       // Only send if simulation says it's resolvable (saves gas & clicks)
