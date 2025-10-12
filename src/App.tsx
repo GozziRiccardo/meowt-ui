@@ -30,7 +30,7 @@ import {
 } from "@tanstack/react-query";
 import { keccak256, toBytes, parseUnits } from "viem";
 import { useSafeWeb3Modal } from "./lib/useSafeWeb3Modal";
-import { watchAccount, watchChainId } from "wagmi/actions";
+import { watchAccount, watchChainId, getAccount, reconnect } from "wagmi/actions";
 
 // at the top of App.tsx
 import { RewardsHeaderButton, RewardsDock } from "./rewardsAuto";
@@ -3007,6 +3007,64 @@ function ConnectControls() {
       unsubscribe();
     };
   }, []);
+
+  React.useEffect(() => {
+    if (!connecting) return;
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+
+    let cancelled = false;
+    let lastReconnectAt = 0;
+
+    const maybeReconnect = () => {
+      const now = Date.now();
+      if (now - lastReconnectAt < 900) return;
+      lastReconnectAt = now;
+      reconnect(wagmiConfig).catch((error) => {
+        console.warn("[connect] Reconnect probe failed:", error);
+      });
+    };
+
+    const syncAccount = () => {
+      if (cancelled) return;
+      const { status: accountStatus } = getAccount(wagmiConfig);
+
+      switch (accountStatus) {
+        case "connected":
+          setConnecting(false);
+          setShowPicker(false);
+          return;
+        case "connecting":
+        case "reconnecting":
+          maybeReconnect();
+          return;
+        case "disconnected":
+        default:
+          setConnecting(false);
+          return;
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      syncAccount();
+    };
+
+    const onFocus = () => {
+      syncAccount();
+    };
+
+    syncAccount();
+    const interval = window.setInterval(syncAccount, 1200);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [connecting]);
 
   const handleDisconnect = React.useCallback(async () => {
     if (disconnecting) return;
