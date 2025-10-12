@@ -1259,7 +1259,10 @@ function useGameSnapshot() {
   }, []);
   const [nowSec, setNowSec] = React.useState(() => computeChainNow());
   React.useEffect(() => {
-    const iv = setInterval(() => setNowSec(computeChainNow()), 500);
+    const iv = setInterval(
+      () => setNowSec((prev) => Math.max(prev, computeChainNow())),
+      500
+    );
     return () => clearInterval(iv);
   }, [computeChainNow]);
 
@@ -1330,7 +1333,7 @@ function useGameSnapshot() {
     const anchorEpoch = fallbackEnd - rem;
     if (!Number.isFinite(anchorEpoch)) return;
     chainNowRef.current = { epoch: anchorEpoch, fetchedAt: Date.now() };
-    setNowSec(computeChainNow());
+    setNowSec((prev) => Math.max(prev, computeChainNow()));
   }, [remChainBN, endTsNum, startTime, B0secs, computeChainNow]);
 
   // Glory window (predict + chain)
