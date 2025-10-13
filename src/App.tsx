@@ -864,6 +864,7 @@ function MessagePreview({
   canVote = true,
   lockLeft = 0,
   lockKind = "none",
+  boostedRem = 0,
 }: {
   msgId?: bigint;
   uri: string;
@@ -877,6 +878,7 @@ function MessagePreview({
   canVote?: boolean;
   lockLeft?: number;
   lockKind?: "boost" | "glory" | "immunity" | "none";
+  boostedRem?: number;
 }) {
   const BOOST_IMG = "/mascots/flame.png";
   const GLORY_IMG = "/mascots/crown.png";
@@ -907,15 +909,17 @@ function MessagePreview({
   const cacheRef = React.useRef<Map<string, string>>(new Map());
 
   const [tick, setTick] = React.useState(0);
-  React.useEffect(() => { setTick(0); }, [lockLeft, lockKind]);
+  React.useEffect(() => { setTick(0); }, [lockLeft, lockKind, boostedRem]);
   React.useEffect(() => {
     const iv = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(iv);
   }, []);
   const left = Math.max(0, Math.floor((lockLeft ?? 0) - tick));
-  const isBoost = lockKind === "boost" && left > 0;
+  const boostSeconds = Math.max(0, Math.floor((boostedRem ?? 0) - tick));
+  const isBoost = boostSeconds > 0;
   const isGlory = lockKind === "glory" && left > 0;
-  const locked = left > 0;
+  const locked = lockKind !== "none" && left > 0;
+  const timerLeft = left > 0 ? left : boostSeconds;
 
   React.useEffect(() => {
     let cancelled = false;
@@ -1014,11 +1018,11 @@ function MessagePreview({
         </div>
       )}
 
-      {left > 0 && (
+      {timerLeft > 0 && (
         <div className={`absolute top-2 right-2 z-20 px-2 py-0.5 rounded-md text-xs font-semibold ${
           isGlory ? "bg-amber-500 text-black" : "bg-red-600 text-white"
         } shadow flex items-center gap-1.5`}>
-          <span>⏳</span><span>{fmtClock(left)}</span>
+          <span>⏳</span><span>{fmtClock(timerLeft)}</span>
         </div>
       )}
 
@@ -3215,6 +3219,7 @@ function ActiveCard() {
               canVote={isConnected && !hasVotedLocal && !hasVotedOnChain}
               lockLeft={Number((snap as any)?.lockLeft ?? 0)}
               lockKind={(snap as any)?.lockKind as any}
+              boostedRem={Number((snap as any)?.boostedRem ?? 0)}
             />
           ) : (
             <PreviewSkeleton />
