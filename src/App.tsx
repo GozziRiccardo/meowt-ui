@@ -1335,7 +1335,7 @@ function useGameSnapshot() {
     const exposureLeftNow = exposureAnchoredNow
       ? Math.max(0, exposureEndRef.current - chainNowS)
       : 0;
-    const guardActiveNow = Date.now() < gloryGuardUntilRef.current;
+    const guardActiveNow = chainNowS < gloryGuardUntilRef.current; // seconds vs seconds
     return guardActiveNow || (exposureAnchoredNow && exposureLeftNow > 0);
   }
 
@@ -1422,7 +1422,7 @@ function useGameSnapshot() {
   const idHoldUntilRef = React.useRef<number>(0);
   const lastStartRef = React.useRef<number>(0);
   const lastContentKeyRef = React.useRef<string>("");
-  const gloryGuardUntilRef = React.useRef<number>(0);
+  const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
 
   // Boot & id-change holds
   const bootHold = Date.now() - APP_BOOT_TS < INIT_HOLD_MS;
@@ -1438,7 +1438,12 @@ function useGameSnapshot() {
       lastStartRef.current = 0;
       lastContentKeyRef.current = "";
 
-      gloryGuardUntilRef.current = Date.now() + GLORY_ON_POST_GUARD_MS;
+      // Short post guard in chain seconds
+      const guardSec = Math.ceil(GLORY_ON_POST_GUARD_MS / 1000);
+      gloryGuardUntilRef.current = Math.max(
+        gloryGuardUntilRef.current,
+        computeChainNow() + guardSec
+      );
 
       if (!booting) {
         showUntilRef.current = Math.max(
@@ -1447,7 +1452,7 @@ function useGameSnapshot() {
         );
       }
 
-      idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS;
+      idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS; // (hold stays in ms)
     }
   }, [hasId, idBig, booting, OPTIMISTIC_SHOW_MS, ID_CHANGE_HOLD_MS]);
 
@@ -1616,10 +1621,8 @@ function useGameSnapshot() {
     if (startTime && winPostImm) {
       const e = startTime + winPostImm;
       if (e > 0) immEndRef.current = Math.max(immEndRef.current, e);
-      if (lastIdRef.current === idBig) {
-        const immEndMs = e * 1000;
-        if (immEndMs > gloryGuardUntilRef.current)
-          gloryGuardUntilRef.current = immEndMs;
+      if (lastIdRef.current === idBig && e > gloryGuardUntilRef.current) {
+        gloryGuardUntilRef.current = e; // seconds
       }
     }
   }, [startTime, winPostImm, idBig]);
@@ -1637,13 +1640,13 @@ function useGameSnapshot() {
   const boostEnd = idMatchesRefs ? boostEndRef.current : 0;
   const cooldownEnd = idMatchesRefs ? cooldownEndRef.current : 0;
   const immEnd = idMatchesRefs ? immEndRef.current : 0;
-  const gloryGuardUntil = idMatchesRefs ? gloryGuardUntilRef.current : 0;
+  const gloryGuardUntil = idMatchesRefs ? gloryGuardUntilRef.current : 0; // seconds
 
   const exposureLeft = Math.max(0, exposureEnd - nowSec);
   const immLeft = Math.max(0, immEnd - nowSec);
   const boostLeft = Math.max(0, boostEnd - nowSec);
   const cooldownLeft = Math.max(0, cooldownEnd - nowSec);
-  const gloryGuardActive = nowMs < gloryGuardUntil;
+  const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
   const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
 
   // Only consider glory after we *know* exposureEnd for this id and have passed it.
@@ -1657,7 +1660,12 @@ function useGameSnapshot() {
   // Prefer immunity while exposure is ongoing; then glory; then boost.
   let lockKind: "boost" | "glory" | "immunity" | "none" = "none";
   let lockLeft = 0;
-  if (exposureLeft > 0 && immLeft > 0) {
+  if (gloryGuardActive) {
+    // During guard, treat as immunity to avoid UI “jump to glory” and to hide the postbox.
+    lockKind = "immunity";
+    const guardLeft = Math.max(0, gloryGuardUntil - nowSec);
+    lockLeft = Math.max(immLeft, exposureLeft, guardLeft);
+  } else if (exposureLeft > 0 && immLeft > 0) {
     lockKind = "immunity";
     lockLeft = immLeft;
   } else if (inGlory && gloryLeft > 0) {
