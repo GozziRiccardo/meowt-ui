@@ -2089,12 +2089,28 @@ function PostBox() {
   const isConnected = useUiConnected();
   const snap = useSnap();
   if (!isConnected) return null;
-  if ((snap as any)?.loading) return null;
 
+  // Chain/window and lock state
+  const chainWindowsClear =
+    ((snap as any)?.rem ?? 0n) <= 0n &&
+    Number((snap as any)?.gloryRem ?? 0) <= 0;
+  const anyLock = ((snap as any)?.lockKind ?? "none") !== "none";
+  const coolingDown = Number((snap as any)?.boostCooldownRem ?? 0) > 0;
+
+  // Let "loading" hide the UI unless we *know* we are idle and unlocked.
+  // If windows are clear AND no locks/cooldowns, ignore a stale loading flag.
+  if ((snap as any)?.loading && !(chainWindowsClear && !anyLock && !coolingDown)) {
+    return null;
+  }
+
+  // Original guards
   const hasActive = Boolean((snap as any)?.show) && (((snap as any)?.rem ?? 0n) > 0n);
   const isCrowning = Number((snap as any)?.gloryRem ?? 0) > 0;
-  const anyLock = ((snap as any)?.lockKind ?? "none") !== "none";
-  if (hasActive || isCrowning || anyLock) return null;
+
+  // Never show Post UI during any lock or cooldown
+  if (hasActive || isCrowning || anyLock || coolingDown) return null;
+
+  // Idle + unlocked → show Post UI
   return <PostBoxInner />;
 }
 
