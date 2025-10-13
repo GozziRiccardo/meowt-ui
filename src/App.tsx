@@ -3563,6 +3563,24 @@ function BlockRefresher() {
   return null;
 }
 
+function HeartbeatRefresher() {
+  const qc = useQueryClient();
+  React.useEffect(() => {
+    let stopped = false;
+    const tick = () => {
+      if (stopped) return;
+      nudgeQueries(qc, [0]);
+    };
+    tick();
+    const iv = window.setInterval(tick, 500);
+    return () => {
+      stopped = true;
+      window.clearInterval(iv);
+    };
+  }, [qc]);
+  return null;
+}
+
 
 // -------------------- Claims: Bar + Modal (strict, de-ghosted) --------------------
 
@@ -3616,6 +3634,7 @@ function AppInner() {
       <InstallBanner />
       <WalletEventRefetch />
       <BlockRefresher />
+      <HeartbeatRefresher />
 
       <header className="py-6">
         <div className="max-w-3xl mx-auto flex flex-col items-center gap-4 px-3">
