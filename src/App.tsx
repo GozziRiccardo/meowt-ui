@@ -1647,15 +1647,19 @@ function useGameSnapshot() {
             broadcastAnchor(bestEpoch);
           }
 
-          // If we're in glory on resume, persist a fresh mask end so other tabs rehydrate.
+          // Only persist the mask if we're already inside the latch window (last 2s of glory).
           if (gRem > 0) {
-            // Absolute end = predicted glory end; mask extends by winFreeze seconds.
-            const predictedMaskEnd =
-              (gloryEndPred > 0 ? gloryEndPred : Math.floor(Date.now() / 1000) + gRem) +
-              Math.max(0, winFreeze || 0);
-            try {
-              writeMaskUntil(GLORY_MASK_KEY, predictedMaskEnd, { messageId: idBig });
-            } catch {}
+            const nowS = Math.floor(Date.now() / 1000);
+            const predictedGloryEnd =
+              gloryEndPred > 0 ? gloryEndPred : nowS + gRem;
+            const latchStart = predictedGloryEnd - GLORY_MASK_LATCH_PAD; // 2s
+            const freezeSecs = Math.max(0, winFreeze || 0);
+            if (nowS >= latchStart && nowS < predictedGloryEnd + freezeSecs) {
+              const predictedMaskEnd = predictedGloryEnd + freezeSecs;
+              try {
+                writeMaskUntil(GLORY_MASK_KEY, predictedMaskEnd, { messageId: idBig });
+              } catch {}
+            }
           }
           // ---- FAST-PATH: snap boost/glory/cooldown right away on focus ----
           // This updates the end refs immediately so the UI feels instant,
