@@ -1583,60 +1583,95 @@ function useGameSnapshot() {
       try {
         setNowSec((prev) => Math.max(prev, computeChainNow()));
         if (hasId && publicClient) {
-          const rem = (await publicClient.readContract({
-            address: GAME as `0x${string}`,
-            abi: GAME_ABI,
-            functionName: "remainingSeconds",
-            // keep args in sync with useReadContract above
-            args: [idBig],
-          })) as bigint;
+          // Read both windows so we can anchor correctly during glory, too.
+          const [remRaw, gloryRemRaw, boostedRemRaw, cooldownRemRaw] = await Promise.all([
+            publicClient
+              .readContract({
+                address: GAME as `0x${string}`,
+                abi: GAME_ABI,
+                functionName: "remainingSeconds",
+                // keep args in sync with useReadContract above
+                args: [idBig],
+              })
+              .catch(() => 0n),
+            publicClient
+              .readContract({
+                address: GAME as `0x${string}`,
+                abi: GAME_ABI,
+                functionName: "gloryRemaining",
+              })
+              .catch(() => 0n),
+            publicClient
+              .readContract({
+                address: GAME as `0x${string}`,
+                abi: GAME_ABI,
+                functionName: "boostedRemaining",
+              })
+              .catch(() => 0n),
+            publicClient
+              .readContract({
+                address: GAME as `0x${string}`,
+                abi: GAME_ABI,
+                functionName: "boostCooldownRemaining",
+              })
+              .catch(() => 0n),
+          ]);
+
+          const rem = Number(remRaw ?? 0n);
+          const gRem = Number(gloryRemRaw ?? 0n);
+          const boostedRem = Number(boostedRemRaw ?? 0n);
+          const cooldownRem = Number(cooldownRemRaw ?? 0n);
+          if (cancelled) return;
+
           const fallbackEnd =
             exposureEndRef.current > 0
               ? exposureEndRef.current
               : startTime && B0secs
               ? startTime + B0secs
               : 0;
-          if (fallbackEnd > 0) {
-            const anchorEpoch = fallbackEnd - Number(rem ?? 0n);
-            chainNowRef.current = { epoch: anchorEpoch, fetchedAt: Date.now() };
-            setNowSec((prev) => Math.max(prev, computeChainNow()));
-            broadcastAnchor(anchorEpoch);
-          }
-        }
+          const gloryEndPred =
+            startTime && B0secs && winGlory ? startTime + B0secs + winGlory : 0;
 
-        // ---- FAST-PATH: snap boost/glory/cooldown right away on focus ----
-        // This updates the end refs immediately so the UI feels instant,
-        // without waiting for TanStack refetch to complete.
-        if (hasId && publicClient) {
-          try {
-            const [glory, boosted, cooldown] = await Promise.all([
-              publicClient.readContract({
-                address: GAME as `0x${string}`,
-                abi: GAME_ABI,
-                functionName: "gloryRemaining",
-              }) as Promise<bigint>,
-              publicClient.readContract({
-                address: GAME as `0x${string}`,
-                abi: GAME_ABI,
-                functionName: "boostedRemaining",
-              }) as Promise<bigint>,
-              publicClient.readContract({
-                address: GAME as `0x${string}`,
-                abi: GAME_ABI,
-                functionName: "boostCooldownRemaining",
-              }) as Promise<bigint>,
-            ]);
-            if (cancelled) return;
-            const nowS = Math.floor(Date.now() / 1000);
-            const g = Number(glory ?? 0n);
-            const b = Number(boosted ?? 0n);
-            const c = Number(cooldown ?? 0n);
-            if (g > 0) gloryEndRef.current = Math.max(gloryEndRef.current, nowS + g);
-            if (b > 0) boostEndRef.current = Math.max(boostEndRef.current, nowS + b);
-            if (c > 0)
-              cooldownEndRef.current = Math.max(cooldownEndRef.current, nowS + c);
-          } catch {
-            /* ignore */
+          const candidates: number[] = [];
+          if (fallbackEnd > 0 && Number.isFinite(rem) && rem >= 0) {
+            candidates.push(fallbackEnd - rem);
+          }
+          if (gloryEndPred > 0 && Number.isFinite(gRem) && gRem > 0) {
+            candidates.push(gloryEndPred - gRem);
+          }
+
+          const bestEpoch = candidates.length ? Math.max(...candidates) : 0;
+          if (bestEpoch > 0 && Number.isFinite(bestEpoch)) {
+            chainNowRef.current = { epoch: bestEpoch, fetchedAt: Date.now() };
+            setNowSec((prev) => Math.max(prev, computeChainNow()));
+            broadcastAnchor(bestEpoch);
+          }
+
+          // If we're in glory on resume, persist a fresh mask end so other tabs rehydrate.
+          if (gRem > 0) {
+            // Absolute end = predicted glory end; mask extends by winFreeze seconds.
+            const predictedMaskEnd =
+              (gloryEndPred > 0 ? gloryEndPred : Math.floor(Date.now() / 1000) + gRem) +
+              Math.max(0, winFreeze || 0);
+            try {
+              writeMaskUntil(GLORY_MASK_KEY, predictedMaskEnd, { messageId: idBig });
+            } catch {}
+          }
+          // ---- FAST-PATH: snap boost/glory/cooldown right away on focus ----
+          // This updates the end refs immediately so the UI feels instant,
+          // without waiting for TanStack refetch to complete.
+          const nowEpoch = Math.floor(Date.now() / 1000);
+          if (gRem > 0) {
+            const predictedGloryEnd =
+              startTime && B0secs && winGlory ? startTime + B0secs + winGlory : nowEpoch + gRem;
+            gloryEndRef.current = Math.max(gloryEndRef.current, predictedGloryEnd);
+            showUntilRef.current = Math.max(showUntilRef.current, predictedGloryEnd);
+          }
+          if (boostedRem > 0) {
+            boostEndRef.current = Math.max(boostEndRef.current, nowEpoch + boostedRem);
+          }
+          if (cooldownRem > 0) {
+            cooldownEndRef.current = Math.max(cooldownEndRef.current, nowEpoch + cooldownRem);
           }
         }
       } catch {
@@ -1655,7 +1690,18 @@ function useGameSnapshot() {
       window.removeEventListener("pageshow", reanchor);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [qc, publicClient, hasId, idBig, computeChainNow, startTime, B0secs]);
+    // include timing parameters to avoid stale predicted ends
+  }, [
+    qc,
+    publicClient,
+    hasId,
+    idBig,
+    computeChainNow,
+    startTime,
+    B0secs,
+    winGlory,
+    winFreeze,
+  ]);
 
   // Final "show" decision
   const untilShow = Math.max(
@@ -2216,6 +2262,7 @@ function ActiveCard() {
     return Math.floor(Date.now() / 1000);
   }, [snap]);
   const [now, setNow] = React.useState(() => computeNow());
+  const rehydrateMasksOnResumeDeps = [glorySec, MASK_SECS]; // only for eslint happiness
   // For cross-tab clamping: visible glory mask should never exceed freeze + pad
   const GLORY_MASK_MAX_SPAN = Math.max(0, MASK_SECS + GLORY_MASK_LATCH_PAD);
   const maskSecsRef = React.useRef(MASK_SECS);
@@ -2331,6 +2378,40 @@ function ActiveCard() {
   const nukeMaskMessageIdRef = React.useRef<bigint>(0n);
   const modMaskUntilRef = React.useRef(0);
   const modMaskMessageIdRef = React.useRef<bigint>(0n);
+  React.useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    const rehydrate = () => {
+      const nowS = Math.floor(Date.now() / 1000);
+      try {
+        const g = readMaskState(GLORY_MASK_KEY);
+        if (g?.until > 0) {
+          const clipped = Math.min(g.until, nowS + GLORY_MASK_MAX_SPAN);
+          gloryUntilRef.current = clipped > nowS ? clipped : 0;
+        }
+        if (g?.messageId) {
+          const id = parseMaskMessageId(g.messageId);
+          if (id > 0n) gloryMaskMessageIdRef.current = id;
+        }
+      } catch {}
+      try {
+        const m = readMaskState(MOD_MASK_KEY);
+        modMaskUntilRef.current = m?.until > 0 ? Math.min(m.until, nowS + MASK_SECS) : 0;
+      } catch {}
+      try {
+        const n = readMaskState(NUKE_MASK_KEY);
+        nukeMaskUntilRef.current = n?.until > 0 ? Math.min(n.until, nowS + MASK_SECS) : 0;
+      } catch {}
+    };
+    const onVis = () => document.visibilityState === "visible" && rehydrate();
+    window.addEventListener("pageshow", rehydrate);
+    window.addEventListener("focus", rehydrate);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("pageshow", rehydrate);
+      window.removeEventListener("focus", rehydrate);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, rehydrateMasksOnResumeDeps);
   const lastActiveMessageRef = React.useRef<{ id: bigint; message: any } | null>(null);
   const [modFrozenMessage, setModFrozenMessage] =
     React.useState<{ id: bigint; message: any } | null>(null);
