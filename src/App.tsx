@@ -2313,87 +2313,77 @@ function ActiveCard() {
     }
   }, [GLORY_MAX_SPAN]);
 
+  // Persist once when we ENTER the latch window (last 2s of glory)
+  const predictedGloryEnd = Number((snap as any)?.gloryPredictedEnd ?? 0);
+  const predictedMaskEnd =
+    predictedGloryEnd > 0 ? predictedGloryEnd + MASK_SECS : 0;
+  const gloryPersistWroteEndRef = React.useRef<number>(0);
+  const gloryPersistWroteIdRef = React.useRef<bigint>(0n);
   React.useEffect(() => {
-    if (glorySec > 0) {
-      // Track the message id to clear mask when a new message arrives
-      if (msgId && msgId !== 0n) {
-        gloryMaskMessageIdRef.current = msgId;
-      }
+    if (!msgId || msgId === 0n || predictedMaskEnd === 0) {
+      gloryPersistWroteEndRef.current = 0;
+      gloryPersistWroteIdRef.current = 0n;
+      return;
+    }
+    const latchStart =
+      predictedMaskEnd > 0
+        ? Math.max(0, predictedMaskEnd - (MASK_SECS + GLORY_MASK_LATCH_PAD))
+        : 0;
+    const inLatchWindow =
+      latchStart > 0 && now >= latchStart && now < predictedMaskEnd;
+    if (!inLatchWindow) return;
+    if (
+      gloryPersistWroteEndRef.current !== predictedMaskEnd ||
+      gloryPersistWroteIdRef.current !== msgId
+    ) {
+      gloryUntilRef.current = predictedMaskEnd;
+      gloryMaskMessageIdRef.current = msgId;
+      gloryPersistWroteEndRef.current = predictedMaskEnd;
+      gloryPersistWroteIdRef.current = msgId;
+      writeMaskUntil(GLORY_MASK_KEY, predictedMaskEnd, { messageId: msgId });
+    }
+  }, [now, msgId, predictedMaskEnd, MASK_SECS]);
 
-      // Always align the stored "until" to the current prediction
-      const predictedEnd = now + glorySec + MASK_SECS;
-      if (
-        gloryUntilRef.current === 0 ||
-        gloryUntilRef.current > predictedEnd ||
-        (gloryMaskMessageIdRef.current !== msgId && msgId && msgId !== 0n)
-      ) {
-        gloryUntilRef.current = predictedEnd;
-        writeMaskUntil(GLORY_MASK_KEY, predictedEnd, { messageId: msgId });
-      }
-    } else if (
+  // Natural end or message switch → clear persisted mask
+  React.useEffect(() => {
+    if (gloryUntilRef.current > 0 && now >= gloryUntilRef.current) {
+      gloryUntilRef.current = 0;
+      gloryMaskMessageIdRef.current = 0n;
+      writeMaskUntil(GLORY_MASK_KEY, 0);
+    }
+    if (
       gloryMaskMessageIdRef.current &&
       msgId &&
       msgId !== 0n &&
       gloryMaskMessageIdRef.current !== msgId
     ) {
-      // New message → drop any old latched glory mask
-      gloryUntilRef.current = 0;
-      gloryMaskMessageIdRef.current = 0n;
-      writeMaskUntil(GLORY_MASK_KEY, 0);
-    } else if (gloryUntilRef.current > 0 && now >= gloryUntilRef.current) {
-      // Timer naturally ended
       gloryUntilRef.current = 0;
       gloryMaskMessageIdRef.current = 0n;
       writeMaskUntil(GLORY_MASK_KEY, 0);
     }
-  }, [glorySec, now, MASK_SECS, msgId]);
+  }, [now, msgId]);
 
-  // Show the mask slightly before the end, or whenever the timer is latched
+  // Authoritative mask end = min(predicted end, persisted end for this message)
+  const persistedEnd =
+    gloryMaskMessageIdRef.current &&
+    msgId &&
+    msgId !== 0n &&
+    gloryMaskMessageIdRef.current === msgId
+      ? gloryUntilRef.current
+      : 0;
+  const maskEndCandidates = [predictedMaskEnd, persistedEnd].filter(
+    (n) => Number.isFinite(n) && n > 0,
+  ) as number[];
+  const maskEnd = maskEndCandidates.length
+    ? Math.min(...maskEndCandidates)
+    : 0;
   const latchPadStart =
-    gloryUntilRef.current > 0
-      ? Math.max(0, gloryUntilRef.current - (MASK_SECS + GLORY_MASK_LATCH_PAD))
-      : 0;
-  const gloryEndingSoon = glorySec > 0 && glorySec <= GLORY_MASK_LATCH_PAD;
-  // read the cross-device deterministic glory end from the snapshot
-  const predictedGloryEnd = Number((snap as any)?.gloryPredictedEnd ?? 0);
-  const predictedMaskEnd =
-    predictedGloryEnd > 0
-      ? Math.min(
-          predictedGloryEnd + maskSecsRef.current,
-          predictedGloryEnd + gloryMaskSpanRef.current,
-        )
-      : 0;
-  const latchedGloryMask =
-    gloryUntilRef.current > 0 &&
-    now >= latchPadStart &&
-    now < gloryUntilRef.current;
-  // Only show the glory mask if it belongs to the current active message id
-  const gloryIdMatches =
-    !!(gloryMaskMessageIdRef.current && msgId && msgId !== 0n) &&
-    gloryMaskMessageIdRef.current === msgId;
-
-  const inPredictedLatchWindow =
-    predictedGloryEnd > 0 &&
-    now >= predictedGloryEnd - GLORY_MASK_LATCH_PAD &&
-    now < predictedMaskEnd;
-
-  const showGloryMask =
-    gloryEndingSoon ||
-    (latchedGloryMask && gloryIdMatches) ||
-    inPredictedLatchWindow;
-
-  // Remaining seconds come from the *target end*, never a max() of sources
-  const runtimeEndWhenLive = glorySec > 0 ? now + glorySec + MASK_SECS : 0;
-  const persistedEnd = gloryUntilRef.current > 0 ? gloryUntilRef.current : 0;
-  const bestMaskEnd = (() => {
-    const candidates = [predictedMaskEnd, persistedEnd, runtimeEndWhenLive].filter(
-      Boolean,
-    ) as number[];
-    return candidates.length
-      ? Math.min(...candidates.filter((n) => Number.isFinite(n) && n > 0))
-      : 0;
-  })();
-  const gloryMaskLeft = showGloryMask ? Math.max(0, bestMaskEnd - now) : 0;
+    maskEnd > 0 ? Math.max(0, maskEnd - (MASK_SECS + GLORY_MASK_LATCH_PAD)) : 0;
+  const showGloryMask = maskEnd > 0 && now >= latchPadStart && now < maskEnd;
+  const rawLeft = maskEnd > 0 ? maskEnd - now : 0;
+  const gloryMaskLeft = showGloryMask
+    ? Math.max(0, Math.min(rawLeft, MASK_SECS + GLORY_MASK_LATCH_PAD))
+    : 0;
 
   // ========= MOD / NUKE MASKS =========
   const NUKE_MASK_SECS = MASK_SECS;
