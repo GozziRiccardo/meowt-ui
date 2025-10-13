@@ -588,6 +588,23 @@ function emitMaskUpdate(key: string, until: number, messageId?: string) {
   }
 }
 
+// Broadcast LS changes from other tabs as our internal mask update event
+function installMaskCrossTabBridge() {
+  if (typeof window === "undefined") return () => {};
+  const onStorage = (event: StorageEvent) => {
+    const key = event.key || "";
+    if (key !== GLORY_MASK_KEY && key !== NUKE_MASK_KEY && key !== MOD_MASK_KEY) return;
+    try {
+      const state = readMaskState(key);
+      emitMaskUpdate(key, state.until, state.messageId);
+    } catch {
+      /* ignore */
+    }
+  };
+  window.addEventListener("storage", onStorage);
+  return () => window.removeEventListener("storage", onStorage);
+}
+
 type MaskWriteOptions = {
   messageId?: bigint | number | string | null;
   type?: MaskType;
@@ -2148,18 +2165,29 @@ function ActiveCard() {
 
   React.useEffect(() => {
     const persisted = readMaskState(GLORY_MASK_KEY);
-
-    if (persisted.messageId) {
-      const parsedId = parseMaskMessageId(persisted.messageId);
-      if (parsedId !== 0n) {
-        gloryMaskMessageIdRef.current = parsedId;
-        gloryMaskTriggeredRef.current = true;
-      }
-    }
+    const parsedId = persisted.messageId
+      ? parseMaskMessageId(persisted.messageId)
+      : 0n;
 
     if (persisted.until > nowSec) {
       gloryMaskUntilRef.current = persisted.until;
+    }
+
+    if (parsedId !== 0n) {
+      gloryMaskMessageIdRef.current = parsedId;
+    }
+
+    if (
+      parsedId !== 0n &&
+      parsedId === (msgId ?? 0n) &&
+      gloryMaskUntilRef.current > nowSec
+    ) {
+      gloryMaskTriggeredRef.current = true;
       setGloryMaskVisible(true);
+      setGloryMaskShouldFade(false);
+    } else {
+      gloryMaskTriggeredRef.current = false;
+      setGloryMaskVisible(false);
       setGloryMaskShouldFade(false);
     }
   }, []);
@@ -2175,6 +2203,17 @@ function ActiveCard() {
     }
 
     const sameMessage = prevMsgId === (msgId ?? 0n);
+    if (
+      msgId &&
+      msgId !== 0n &&
+      gloryMaskMessageIdRef.current === msgId &&
+      gloryMaskUntilRef.current > nowSec &&
+      !gloryMaskVisible
+    ) {
+      gloryMaskTriggeredRef.current = true;
+      setGloryMaskVisible(true);
+      setGloryMaskShouldFade(false);
+    }
     if (!sameMessage) {
       if (
         gloryMaskUntilRef.current > 0 ||
@@ -2421,6 +2460,74 @@ function ActiveCard() {
   const effectiveShowGloryMask = gloryMaskVisible && !masksSuppressed;
   const effectiveShowNukeMask = showNukeMask && !masksSuppressed;
   const effectiveShowModMask = showModMask && !masksSuppressed;
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onMaskEvt = (evt: Event) => {
+      const detail = (evt as CustomEvent<MaskEventDetail>).detail || {};
+      const key = String(detail.key || "");
+      const until = Number(detail.until || 0);
+      const messageId = parseMaskMessageId(detail.messageId || null);
+      const now = readChainNow();
+
+      if (key === GLORY_MASK_KEY) {
+        if (messageId !== 0n) {
+          gloryMaskMessageIdRef.current = messageId;
+        }
+
+        if (until > now) {
+          gloryMaskUntilRef.current = until;
+          if (messageId !== 0n) {
+            gloryMaskTriggeredRef.current = true;
+          }
+          setGloryMaskVisible(true);
+          setGloryMaskShouldFade(false);
+        } else {
+          gloryMaskUntilRef.current = 0;
+          gloryMaskTriggeredRef.current = false;
+          setGloryMaskVisible(false);
+          setGloryMaskShouldFade(false);
+        }
+      } else if (key === NUKE_MASK_KEY) {
+        if (until > now) {
+          nukeMaskUntilRef.current = until;
+          if (messageId !== 0n) {
+            nukeMaskMessageIdRef.current = messageId;
+          }
+          nukeMaskTriggeredRef.current = true;
+        } else {
+          nukeMaskUntilRef.current = 0;
+          nukeMaskMessageIdRef.current = 0n;
+          nukeMaskTriggeredRef.current = false;
+        }
+      } else if (key === MOD_MASK_KEY) {
+        if (until > now && messageId !== 0n) {
+          modMaskUntilRef.current = until;
+          modMaskMessageIdRef.current = messageId;
+          modMaskTriggeredRef.current = true;
+
+          const latched = lastActiveMessageRef.current;
+          if (latched && latched.id === messageId) {
+            setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
+          }
+        } else if (messageId !== 0n || until <= now) {
+          modMaskUntilRef.current = 0;
+          modMaskMessageIdRef.current = 0n;
+          modMaskTriggeredRef.current = false;
+          setModFrozenMessage(null);
+        }
+      }
+    };
+
+    window.addEventListener(MASK_EVENT, onMaskEvt as EventListener);
+    const uninstallBridge = installMaskCrossTabBridge();
+
+    return () => {
+      window.removeEventListener(MASK_EVENT, onMaskEvt as EventListener);
+      uninstallBridge();
+    };
+  }, []);
 
   const showingModeratedFreeze = Boolean(!hasActive && effectiveShowModMask && modFrozenMessage);
   const displayMsgId = showingModeratedFreeze ? (modFrozenMessage!.id ?? 0n) : msgId;
