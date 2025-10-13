@@ -1230,7 +1230,6 @@ function useGameSnapshot() {
       // IMPORTANT: on focus, fetch immediately so the tab "catches up"
       refetchOnWindowFocus: true,
       refetchInterval: 1000,
-      placeholderData: (p) => p,
     },
   });
 
@@ -1243,7 +1242,6 @@ function useGameSnapshot() {
       staleTime: 0,
       refetchOnWindowFocus: true,
       refetchInterval: 1000,
-      placeholderData: (p) => p,
     },
   });
 
@@ -1512,33 +1510,42 @@ function useGameSnapshot() {
     if (until > 0) showUntilRef.current = Math.max(showUntilRef.current, until);
   }, [endTsNum, startTime, B0secs, winGlory, gloryRemChainBN]);
 
-  // Derived clocks
-  const exposureLeft = Math.max(0, exposureEndRef.current - nowSec);
-  const immLeft = Math.max(0, immEndRef.current - nowSec);
-  const boostLeft = Math.max(0, boostEndRef.current - nowSec);
-  const cooldownLeft = Math.max(0, cooldownEndRef.current - nowSec);
+  // Derived clocks (guard all ref-based ends to the current id to avoid stale carryover)
+  const idMatchesRefs = lastIdRef.current === idBig;
+  const exposureEnd = idMatchesRefs ? exposureEndRef.current : 0;
+  const gloryEnd = idMatchesRefs ? gloryEndRef.current : 0;
+  const boostEnd = idMatchesRefs ? boostEndRef.current : 0;
+  const cooldownEnd = idMatchesRefs ? cooldownEndRef.current : 0;
+  const immEnd = idMatchesRefs ? immEndRef.current : 0;
 
-  const remFallback = Math.max(0, Number(remChainBN ?? 0n));
-  const remSec = endTsNum > 0 || exposureEndRef.current > 0 ? exposureLeft : remFallback;
+  const exposureLeft = Math.max(0, exposureEnd - nowSec);
+  const immLeft = Math.max(0, immEnd - nowSec);
+  const boostLeft = Math.max(0, boostEnd - nowSec);
+  const cooldownLeft = Math.max(0, cooldownEnd - nowSec);
 
-  const resolvedFlag = Boolean((m as any)?.resolved ?? (m as any)?.[10]);
-  const nukedFlag = Boolean((m as any)?.nuked ?? (m as any)?.[11]);
+  // Only consider glory after we *know* exposureEnd for this id and have passed it.
+  const inGlory = exposureEnd > 0 && nowSec >= exposureEnd && gloryEnd > nowSec;
+  const gloryLeft = inGlory ? gloryEnd - nowSec : 0;
 
-  const inGlory = exposureLeft === 0 && gloryEndRef.current > nowSec;
-  const gloryLeft = inGlory ? gloryEndRef.current - nowSec : 0;
-
+  // Prefer immunity while exposure is ongoing; then glory; then boost.
   let lockKind: "boost" | "glory" | "immunity" | "none" = "none";
   let lockLeft = 0;
-  if (inGlory && gloryLeft > 0) {
+  if (exposureLeft > 0 && immLeft > 0) {
+    lockKind = "immunity";
+    lockLeft = immLeft;
+  } else if (inGlory && gloryLeft > 0) {
     lockKind = "glory";
     lockLeft = gloryLeft;
   } else if (boostLeft > 0) {
     lockKind = "boost";
     lockLeft = boostLeft;
-  } else if (exposureLeft > 0 && immLeft > 0) {
-    lockKind = "immunity";
-    lockLeft = immLeft;
   }
+
+  const remFallback = Math.max(0, Number(remChainBN ?? 0n));
+  const remSec = endTsNum > 0 || exposureEnd > 0 ? exposureLeft : remFallback;
+
+  const resolvedFlag = Boolean((m as any)?.resolved ?? (m as any)?.[10]);
+  const nukedFlag = Boolean((m as any)?.nuked ?? (m as any)?.[11]);
 
   const replaceLocked = Boolean(replaceBlocked) || lockLeft > 0;
 
@@ -1710,7 +1717,7 @@ function useGameSnapshot() {
   // Final "show" decision
   const untilShow = Math.max(
     showUntilRef.current,
-    Math.max(exposureEndRef.current, gloryEndRef.current),
+    Math.max(exposureEnd, gloryEnd),
   );
   const baseShow = hasId && nowSec < untilShow + SHOW_CUSHION;
   const effectiveShow =
