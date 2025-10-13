@@ -1773,6 +1773,7 @@ function useGameSnapshot() {
     lockKind,
     lockLeft,
     loading: loadingState,
+    gloryPredictedEnd: Math.max(0, gloryEndRef.current),
     nowSec,
   } as const;
 }
@@ -2353,7 +2354,8 @@ function ActiveCard() {
       ? Math.max(0, gloryUntilRef.current - (MASK_SECS + GLORY_MASK_LATCH_PAD))
       : 0;
   const gloryEndingSoon = glorySec > 0 && glorySec <= GLORY_MASK_LATCH_PAD;
-  const predictedGloryEnd = gloryEndRef.current;
+  // read the cross-device deterministic glory end from the snapshot
+  const predictedGloryEnd = Number((snap as any)?.gloryPredictedEnd ?? 0);
   const predictedMaskEnd =
     predictedGloryEnd > 0
       ? Math.min(
