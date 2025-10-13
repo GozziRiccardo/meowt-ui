@@ -1359,6 +1359,8 @@ function useGameSnapshot() {
   const immEndRef = React.useRef<number>(0);
   const showUntilRef = React.useRef<number>(0);
   const idHoldUntilRef = React.useRef<number>(0);
+  const lastStartRef = React.useRef<number>(0);
+  const lastContentKeyRef = React.useRef<string>("");
 
   // Boot & id-change holds
   const bootHold = Date.now() - APP_BOOT_TS < INIT_HOLD_MS;
@@ -1371,6 +1373,8 @@ function useGameSnapshot() {
       boostEndRef.current = 0;
       cooldownEndRef.current = 0;
       immEndRef.current = 0;
+      lastStartRef.current = 0;
+      lastContentKeyRef.current = "";
 
       if (!booting) {
         showUntilRef.current = Math.max(
@@ -1392,7 +1396,50 @@ function useGameSnapshot() {
     cooldownEndRef.current = 0;
     immEndRef.current = 0;
     showUntilRef.current = 0;
+    lastStartRef.current = 0;
+    lastContentKeyRef.current = "";
   }, [hasId]);
+
+  React.useEffect(() => {
+    if (!hasId) return;
+    if (startTime <= 0) return;
+    const rawContentHash = (m?.contentHash ?? m?.[6] ?? "0x") as string;
+    const rawUri = (m?.uri ?? m?.[5] ?? "") as string;
+    const rawAuthor = (m?.author ?? m?.[1]) as string | undefined;
+    const msgContentKey = `${rawContentHash || "0x"}|${rawUri || ""}|${rawAuthor || ""}`;
+    const sameContent = lastContentKeyRef.current === msgContentKey;
+    lastContentKeyRef.current = msgContentKey;
+    if (lastStartRef.current === startTime) return;
+
+    const seenBefore = lastStartRef.current > 0;
+    lastStartRef.current = startTime;
+    if (!seenBefore) return;
+
+    if (!sameContent) return;
+
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    const gloryActive = gloryEndRef.current > nowEpoch;
+
+    exposureEndRef.current = 0;
+    if (!gloryActive) gloryEndRef.current = 0;
+    boostEndRef.current = 0;
+    cooldownEndRef.current = 0;
+    immEndRef.current = 0;
+
+    chainNowRef.current = { epoch: 0, fetchedAt: 0 };
+    setNowSec(Math.floor(Date.now() / 1000));
+    broadcastNudge();
+    nudgeQueries(qc, [0, 200]);
+
+    if (!booting) {
+      showUntilRef.current = Math.max(
+        showUntilRef.current,
+        Math.floor(Date.now() / 1000) + Math.ceil(OPTIMISTIC_SHOW_MS / 1000),
+      );
+    }
+
+    idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS;
+  }, [hasId, startTime, booting, OPTIMISTIC_SHOW_MS, ID_CHANGE_HOLD_MS, qc]);
 
   const idChangeHold = Date.now() < idHoldUntilRef.current;
 
