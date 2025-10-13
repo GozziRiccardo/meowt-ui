@@ -2091,6 +2091,17 @@ function PostBox() {
   if (!isConnected) return null;
   if ((snap as any)?.loading) return null;
 
+  // Failsafe: if nothing is visible and chain windows are clear, allow posting UI.
+  // This prevents “waiting screen with no postbox” when a local guard latched.
+  const noActiveVisible = !Boolean((snap as any)?.show);
+  const chainWindowsClear =
+    ((snap as any)?.rem ?? 0n) <= 0n &&
+    Number((snap as any)?.gloryRem ?? 0) <= 0;
+
+  if (noActiveVisible && chainWindowsClear) {
+    return <PostBoxInner />;
+  }
+
   const hasActive = Boolean((snap as any)?.show) && (((snap as any)?.rem ?? 0n) > 0n);
   const isCrowning = Number((snap as any)?.gloryRem ?? 0) > 0;
   const anyLock = ((snap as any)?.lockKind ?? "none") !== "none";
