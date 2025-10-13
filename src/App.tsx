@@ -919,7 +919,8 @@ function MessagePreview({
   const isBoost = boostSeconds > 0;
   const isGlory = lockKind === "glory" && left > 0;
   const locked = lockKind !== "none" && left > 0;
-  const timerLeft = left > 0 ? left : boostSeconds;
+  // If a boost is active, the badge should reflect the boost time even during immunity.
+  const timerLeft = isBoost ? boostSeconds : (left > 0 ? left : 0);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -1375,7 +1376,11 @@ function useGameSnapshot() {
       } else if (data.t === "nudge") {
         nudgeQueries(qc, [0, 500]);
       } else if (data.t === "boostEnd" && Number.isFinite(data.end)) {
-        boostEndRef.current = Math.max(boostEndRef.current, Number(data.end));
+        const end = Number(data.end);
+        if (end > boostEndRef.current) {
+          boostEndRef.current = end;
+          if (idBig && idBig !== 0n) writeBoostEndLS(idBig, end);
+        }
         nudgeQueries(qc, [0, 300]);
       } else if (data.t === "cooldownEnd" && Number.isFinite(data.end)) {
         cooldownEndRef.current = Math.max(cooldownEndRef.current, Number(data.end));
@@ -1388,7 +1393,7 @@ function useGameSnapshot() {
       bcRef.current?.close();
       bcRef.current = null;
     };
-  }, [computeChainNow, qc]);
+  }, [computeChainNow, qc, idBig]);
 
   function broadcastAnchor(epoch: number) {
     try {
@@ -1408,6 +1413,25 @@ function useGameSnapshot() {
   function broadcastCooldownEnd(end: number) {
     try {
       bcRef.current?.postMessage({ t: "cooldownEnd", end, at: Date.now() });
+    } catch {}
+  }
+
+  function boostKey(id: bigint | number | string) {
+    return `meowt:boostEnd:${String(id)}`;
+  }
+  function readBoostEndLS(id: bigint): number {
+    try {
+      const v = localStorage.getItem(boostKey(id));
+      const n = v ? Number(v) : 0;
+      return Number.isFinite(n) ? n : 0;
+    } catch {
+      return 0;
+    }
+  }
+  function writeBoostEndLS(id: bigint, endEpochSec: number) {
+    if (!id || id === 0n || !Number.isFinite(endEpochSec)) return;
+    try {
+      localStorage.setItem(boostKey(id), String(Math.max(0, Math.floor(endEpochSec))));
     } catch {}
   }
 
@@ -1453,8 +1477,15 @@ function useGameSnapshot() {
       }
 
       idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS; // (hold stays in ms)
+
+      // Hydrate boost end from LS to avoid "reset to max duration" after refresh.
+      const persisted = readBoostEndLS(idBig);
+      const nowS = computeChainNow();
+      if (persisted > nowS) {
+        boostEndRef.current = Math.max(boostEndRef.current, persisted);
+      }
     }
-  }, [hasId, idBig, booting, OPTIMISTIC_SHOW_MS, ID_CHANGE_HOLD_MS]);
+  }, [hasId, idBig, booting, OPTIMISTIC_SHOW_MS, ID_CHANGE_HOLD_MS, computeChainNow]);
 
   React.useEffect(() => {
     if (hasId) return;
@@ -1590,8 +1621,9 @@ function useGameSnapshot() {
     if (end > boostEndRef.current) {
       boostEndRef.current = end;
       broadcastBoostEnd(end);
+      if (idBig && idBig !== 0n) writeBoostEndLS(idBig, end);
     }
-  }, [boostedRemLiveBN, computeChainNow]);
+  }, [boostedRemLiveBN, computeChainNow, idBig]);
 
   // Live: anchor cooldown end from chain-anchored "now", then broadcast
   React.useEffect(() => {
@@ -1607,8 +1639,14 @@ function useGameSnapshot() {
   // Boost & cooldown latches
   React.useEffect(() => {
     const boostedRem = Number(boostedRemBN ?? 0n);
-    if (boostedRem > 0) boostEndRef.current = Math.max(boostEndRef.current, nowSec + boostedRem);
-  }, [boostedRemBN, nowSec]);
+    if (boostedRem > 0) {
+      const end = nowSec + boostedRem;
+      if (end > boostEndRef.current) {
+        boostEndRef.current = end;
+        if (idBig && idBig !== 0n) writeBoostEndLS(idBig, end);
+      }
+    }
+  }, [boostedRemBN, nowSec, idBig]);
   
   React.useEffect(() => {
     const cooldownRem = Number(boostCooldownBN ?? 0n);
@@ -1819,7 +1857,11 @@ function useGameSnapshot() {
             showUntilRef.current = Math.max(showUntilRef.current, predictedGloryEnd);
           }
           if (boostedRem > 0) {
-            boostEndRef.current = Math.max(boostEndRef.current, nowEpoch + boostedRem);
+            const end = nowEpoch + boostedRem;
+            if (end > boostEndRef.current) {
+              boostEndRef.current = end;
+              if (idBig && idBig !== 0n) writeBoostEndLS(idBig, end);
+            }
           }
           if (cooldownRem > 0) {
             cooldownEndRef.current = Math.max(cooldownEndRef.current, nowEpoch + cooldownRem);
@@ -1859,7 +1901,11 @@ function useGameSnapshot() {
     showUntilRef.current,
     Math.max(exposureEnd, gloryEnd),
   );
-  const baseShow = hasId && nowSec < untilShow + SHOW_CUSHION;
+  const liveProofNow =
+    Number(remChainBN ?? 0n) > 0 || Number(gloryRemChainBN ?? 0n) > 0;
+  // If we have live proof, allow showing even before batched `raw` settles.
+  const baseShow = hasId && (nowSec < untilShow + SHOW_CUSHION || liveProofNow);
+  const rawReadyEnough = Boolean(raw) || liveProofNow;
   const effectiveShow =
     baseShow &&
     !definitelyOver &&
@@ -1867,7 +1913,7 @@ function useGameSnapshot() {
     !bootHold &&
     !idChangeHold &&
     !waitingForId &&
-    !(hasId && !raw);
+    rawReadyEnough;
 
   // Clear optimistic show once resolved
   React.useEffect(() => {
