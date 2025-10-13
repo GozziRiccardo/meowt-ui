@@ -868,6 +868,7 @@ function MessagePreview({
   lockLeft = 0,
   lockKind = "none",
   boostedRem = 0,
+  timerOverride,
 }: {
   msgId?: bigint;
   uri: string;
@@ -882,6 +883,7 @@ function MessagePreview({
   lockLeft?: number;
   lockKind?: "boost" | "glory" | "immunity" | "none";
   boostedRem?: number;
+  timerOverride?: number;
 }) {
   const BOOST_IMG = "/mascots/flame.png";
   const GLORY_IMG = "/mascots/crown.png";
@@ -912,7 +914,7 @@ function MessagePreview({
   const cacheRef = React.useRef<Map<string, string>>(new Map());
 
   const [tick, setTick] = React.useState(0);
-  React.useEffect(() => { setTick(0); }, [lockLeft, lockKind, boostedRem]);
+  React.useEffect(() => { setTick(0); }, [lockKind, boostedRem, timerOverride]);
   React.useEffect(() => {
     const iv = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(iv);
@@ -923,7 +925,9 @@ function MessagePreview({
   const isGlory = lockKind === "glory" && left > 0;
   const locked = lockKind !== "none" && left > 0;
   // If a boost is active, the badge should reflect the boost time even during immunity.
-  const timerLeft = isBoost ? boostSeconds : (left > 0 ? left : 0);
+  const timerLeft = Number.isFinite(timerOverride) && (timerOverride ?? 0) > 0
+    ? Math.max(0, Math.floor((timerOverride as number) - tick))
+    : (isBoost ? boostSeconds : (left > 0 ? left : 0));
 
   React.useEffect(() => {
     let cancelled = false;
@@ -1508,6 +1512,53 @@ function useGameSnapshot() {
   const lastContentKeyRef = React.useRef<string>("");
   const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
 
+  // Fast prime of exposure/glory ends on mount & id changes (refresh resilience)
+  React.useEffect(() => {
+    if (!hasId || !publicClient || !idBig) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        // Read endTime(id) + windows (winGlory) directly to compute a predicted glory end
+        const [endBn, wins] = await Promise.all([
+          publicClient.readContract({
+            address: GAME as `0x${string}`,
+            abi: GAME_ABI,
+            functionName: "endTime",
+            args: [idBig],
+            blockTag: "latest",
+          }).catch(() => 0n),
+          publicClient.readContract({
+            address: GAME as `0x${string}`,
+            abi: GAME_ABI,
+            functionName: "windows",
+            blockTag: "latest",
+          }).catch(() => null),
+        ]);
+
+        if (cancelled) return;
+
+        const eNum = Number(endBn ?? 0n);
+        const gWin = Number((wins as any)?.[1] ?? 0n);
+
+        if (eNum > 0) {
+          // Prime exposure end immediately
+          exposureEndRef.current = Math.max(exposureEndRef.current, eNum);
+          if (gWin > 0) {
+            // Prime predicted glory end and show-latch to prevent flicker into immunity/post
+            const gEnd = eNum + gWin;
+            gloryEndRef.current = Math.max(gloryEndRef.current, gEnd);
+            showUntilRef.current = Math.max(showUntilRef.current, gEnd);
+            setNowSec((prev) => Math.max(prev, computeChainNow()));
+            broadcastNudge();
+          }
+        }
+      } catch {
+        /* noop: live reads will correct shortly */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [hasId, idBig, publicClient, computeChainNow]);
+
   // Rehydrate persisted immunity end for this message id (instant UI on refresh)
   React.useEffect(() => {
     if (!hasId || !idBig) return;
@@ -1767,6 +1818,18 @@ function useGameSnapshot() {
   const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
   const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
 
+  const gloryRemLive = Number(gloryRemChainBN ?? 0n);
+  // Glory hint: either chain says we're in glory OR predicted window covers "now"
+  const gloryActiveHint =
+    gloryRemLive > 0 ||
+    (exposureEndRef.current > 0 &&
+     nowSec >= exposureEndRef.current &&
+     gloryEndRef.current > nowSec);
+
+  const gloryLeftUi = gloryRemLive > 0
+    ? gloryRemLive
+    : (gloryEndRef.current > nowSec ? gloryEndRef.current - nowSec : 0);
+
   // Only consider glory after we *know* exposureEnd for this id and have passed it.
   const inGlory =
     exposureLeft === 0 &&
@@ -1783,6 +1846,9 @@ function useGameSnapshot() {
     lockKind = "immunity";
     const guardLeft = Math.max(0, gloryGuardUntil - nowSec);
     lockLeft = Math.max(immLeft, exposureLeft, guardLeft);
+  } else if (gloryActiveHint && gloryLeftUi > 0) {
+    lockKind = "glory";
+    lockLeft = gloryLeftUi;
   } else if (exposureLeft > 0 && immLeft > 0) {
     lockKind = "immunity";
     lockLeft = immLeft;
@@ -1992,7 +2058,13 @@ function useGameSnapshot() {
   const liveProofNow =
     Number(remChainBN ?? 0n) > 0 || Number(gloryRemChainBN ?? 0n) > 0;
   // If we have live proof, allow showing even before batched `raw` settles.
-  const baseShow = hasId && (nowSec < untilShow + SHOW_CUSHION || liveProofNow);
+  const baseShow =
+    hasId &&
+    (
+      nowSec < untilShow + SHOW_CUSHION ||
+      liveProofNow ||
+      gloryActiveHint // glory predicted/confirmed keeps the card visible
+    );
   const rawReadyEnough = Boolean(raw) || liveProofNow;
   const effectiveShow =
     baseShow &&
@@ -2060,6 +2132,7 @@ function useGameSnapshot() {
     loading: loadingState,
     gloryPredictedEnd: Math.max(0, gloryEndRef.current),
     nowSec,
+    immLeft,
   } as const;
 }
 const GameSnapshotContext = React.createContext<ReturnType<typeof useGameSnapshot> | null>(null);
@@ -2097,6 +2170,13 @@ function PostBox() {
   const anyLock = ((snap as any)?.lockKind ?? "none") !== "none";
   const coolingDown = Number((snap as any)?.boostCooldownRem ?? 0) > 0;
 
+  // Predictive guard: if we know glory is ongoing by prediction, suppress PostBox
+  const nowSec = Number((snap as any)?.nowSec ?? 0);
+  const gEndPred = Number((snap as any)?.gloryPredictedEnd ?? 0);
+  const predictedGloryActive = gEndPred > 0 && nowSec > 0 &&
+    (Number((snap as any)?.rem ?? 0) === 0) &&
+    nowSec < gEndPred;
+
   // Let "loading" hide the UI unless we *know* we are idle and unlocked.
   // If windows are clear AND no locks/cooldowns, ignore a stale loading flag.
   if ((snap as any)?.loading && !(chainWindowsClear && !anyLock && !coolingDown)) {
@@ -2108,7 +2188,7 @@ function PostBox() {
   const isCrowning = Number((snap as any)?.gloryRem ?? 0) > 0;
 
   // Never show Post UI during any lock or cooldown
-  if (hasActive || isCrowning || anyLock || coolingDown) return null;
+  if (hasActive || isCrowning || anyLock || predictedGloryActive || coolingDown) return null;
 
   // Idle + unlocked → show Post UI
   return <PostBoxInner />;
@@ -2509,6 +2589,13 @@ function ActiveCard() {
   const [toast, setToast] = React.useState("");
   const { quiet, setQuiet } = useQuiet();
   const hasActive = Boolean((snap as any)?.show);
+
+  const lk = (snap as any)?.lockKind as "boost" | "glory" | "immunity" | "none";
+  const timerOverride =
+    lk === "immunity" ? Number((snap as any)?.immLeft ?? 0) :
+    lk === "glory"    ? Number((snap as any)?.gloryRem ?? 0) :
+    lk === "boost"    ? Number((snap as any)?.boostedRem ?? 0) :
+    0;
 
   // --- vote state / gating ---
   const msgId: bigint = (snap as any)?.id ?? 0n;
@@ -3406,6 +3493,7 @@ function ActiveCard() {
               lockLeft={Number((snap as any)?.lockLeft ?? 0)}
               lockKind={(snap as any)?.lockKind as any}
               boostedRem={Number((snap as any)?.boostedRem ?? 0)}
+              timerOverride={timerOverride}
             />
           ) : (
             <PreviewSkeleton />
