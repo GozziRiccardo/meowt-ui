@@ -1123,6 +1123,7 @@ function useGameSnapshot() {
   const OPTIMISTIC_SHOW_MS = 1100;
   const ID_PENDING_MAX_HOLD_MS = 1800;
   const SHOW_CUSHION = 1;
+  const GLORY_ON_POST_GUARD_MS = 1200;
   const { quiet } = useQuiet();
 
   // -------- Boot anti-ghost settings --------
@@ -1402,6 +1403,7 @@ function useGameSnapshot() {
   const idHoldUntilRef = React.useRef<number>(0);
   const lastStartRef = React.useRef<number>(0);
   const lastContentKeyRef = React.useRef<string>("");
+  const gloryGuardUntilRef = React.useRef<number>(0);
 
   // Boot & id-change holds
   const bootHold = Date.now() - APP_BOOT_TS < INIT_HOLD_MS;
@@ -1416,6 +1418,8 @@ function useGameSnapshot() {
       immEndRef.current = 0;
       lastStartRef.current = 0;
       lastContentKeyRef.current = "";
+
+      gloryGuardUntilRef.current = Date.now() + GLORY_ON_POST_GUARD_MS;
 
       if (!booting) {
         showUntilRef.current = Math.max(
@@ -1439,6 +1443,7 @@ function useGameSnapshot() {
     showUntilRef.current = 0;
     lastStartRef.current = 0;
     lastContentKeyRef.current = "";
+    gloryGuardUntilRef.current = 0;
   }, [hasId]);
 
   React.useEffect(() => {
@@ -1605,14 +1610,21 @@ function useGameSnapshot() {
   const boostEnd = idMatchesRefs ? boostEndRef.current : 0;
   const cooldownEnd = idMatchesRefs ? cooldownEndRef.current : 0;
   const immEnd = idMatchesRefs ? immEndRef.current : 0;
+  const gloryGuardUntil = idMatchesRefs ? gloryGuardUntilRef.current : 0;
 
   const exposureLeft = Math.max(0, exposureEnd - nowSec);
   const immLeft = Math.max(0, immEnd - nowSec);
   const boostLeft = Math.max(0, boostEnd - nowSec);
   const cooldownLeft = Math.max(0, cooldownEnd - nowSec);
+  const gloryGuardActive = nowMs < gloryGuardUntil;
+  const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
 
   // Only consider glory after we *know* exposureEnd for this id and have passed it.
-  const inGlory = exposureEnd > 0 && nowSec >= exposureEnd && gloryEnd > nowSec;
+  const inGlory =
+    exposureLeft === 0 &&
+    gloryEnd > nowSec &&
+    exposureAnchored &&
+    !gloryGuardActive;
   const gloryLeft = inGlory ? gloryEnd - nowSec : 0;
 
   // Prefer immunity while exposure is ongoing; then glory; then boost.
