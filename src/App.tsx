@@ -2879,6 +2879,36 @@ function AddMeowtButtonInner() {
       setBusy(false);
     }
   }, [open, walletClient]);
+
+  React.useEffect(() => {
+    if (!busy) return;
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+
+    let cancelled = false;
+    const reset = () => {
+      if (cancelled) return;
+      setBusy(false);
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        reset();
+      }
+    };
+
+    const onFocus = () => {
+      reset();
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [busy]);
   return (
     <button
       onClick={addToken}
