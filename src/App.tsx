@@ -1245,6 +1245,33 @@ function useGameSnapshot() {
     },
   });
 
+  // Live boost/cooldown windows (1s polling, focus re-sync)
+  const { data: boostedRemLiveBN } = useReadContract({
+    address: GAME as `0x${string}`,
+    abi: GAME_ABI,
+    functionName: "boostedRemaining",
+    query: {
+      enabled: hasId && !quiet,
+      staleTime: 0,
+      refetchOnWindowFocus: true,
+      refetchInterval: 1000,
+      placeholderData: (p) => p,
+    },
+  });
+
+  const { data: boostCooldownLiveBN } = useReadContract({
+    address: GAME as `0x${string}`,
+    abi: GAME_ABI,
+    functionName: "boostCooldownRemaining",
+    query: {
+      enabled: hasId && !quiet,
+      staleTime: 0,
+      refetchOnWindowFocus: true,
+      refetchInterval: 1000,
+      placeholderData: (p) => p,
+    },
+  });
+
   // Live boost cost latch
   const { data: boostCostLive } = useReadContract({
     address: GAME as `0x${string}`,
@@ -1327,6 +1354,12 @@ function useGameSnapshot() {
         }
       } else if (data.t === "nudge") {
         nudgeQueries(qc, [0, 500]);
+      } else if (data.t === "boostEnd" && Number.isFinite(data.end)) {
+        boostEndRef.current = Math.max(boostEndRef.current, Number(data.end));
+        nudgeQueries(qc, [0, 300]);
+      } else if (data.t === "cooldownEnd" && Number.isFinite(data.end)) {
+        cooldownEndRef.current = Math.max(cooldownEndRef.current, Number(data.end));
+        nudgeQueries(qc, [0, 300]);
       }
     };
     bcRef.current?.addEventListener("message", onMsg as any);
@@ -1345,6 +1378,16 @@ function useGameSnapshot() {
   function broadcastNudge() {
     try {
       bcRef.current?.postMessage({ t: "nudge" });
+    } catch {}
+  }
+  function broadcastBoostEnd(end: number) {
+    try {
+      bcRef.current?.postMessage({ t: "boostEnd", end, at: Date.now() });
+    } catch {}
+  }
+  function broadcastCooldownEnd(end: number) {
+    try {
+      bcRef.current?.postMessage({ t: "cooldownEnd", end, at: Date.now() });
     } catch {}
   }
 
@@ -1498,7 +1541,7 @@ function useGameSnapshot() {
       gloryEndRef.current = Math.max(gloryEndRef.current, predEnd);
     }
   }, [gloryRemChainBN, startTime, B0secs, winGlory, nowSec]);
-  
+
   React.useEffect(() => {
     const exp = exposureEndRef.current;
     if (exp > 0 && winGlory > 0) {
@@ -1506,6 +1549,28 @@ function useGameSnapshot() {
       if (gloryEndRef.current > hardEnd) gloryEndRef.current = hardEnd;
     }
   }, [endTsNum, startTime, B0secs, winGlory]);
+
+  // Live: anchor boost end from chain-anchored "now", then broadcast
+  React.useEffect(() => {
+    const live = Number(boostedRemLiveBN ?? 0n);
+    if (!Number.isFinite(live) || live <= 0) return;
+    const end = computeChainNow() + live;
+    if (end > boostEndRef.current) {
+      boostEndRef.current = end;
+      broadcastBoostEnd(end);
+    }
+  }, [boostedRemLiveBN, computeChainNow]);
+
+  // Live: anchor cooldown end from chain-anchored "now", then broadcast
+  React.useEffect(() => {
+    const live = Number(boostCooldownLiveBN ?? 0n);
+    if (!Number.isFinite(live) || live <= 0) return;
+    const end = computeChainNow() + live;
+    if (end > cooldownEndRef.current) {
+      cooldownEndRef.current = end;
+      broadcastCooldownEnd(end);
+    }
+  }, [boostCooldownLiveBN, computeChainNow]);
 
   // Boost & cooldown latches
   React.useEffect(() => {
