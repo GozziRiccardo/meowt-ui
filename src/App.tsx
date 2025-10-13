@@ -1324,6 +1324,21 @@ function useGameSnapshot() {
     return Math.floor(Date.now() / 1000);
   }, []);
 
+  // Do not anchor from gloryRemaining while the *current* message is still in exposure,
+  // or while our post-guard is active. This prevents early jumps into glory at post time.
+  function suppressGloryAnchorNow(): boolean {
+    if (!idBig || idBig === 0n) return true; // nothing meaningful to anchor
+    const idMatches = lastIdRef.current === idBig;
+    // Exposure is "anchored" once we know exposureEnd for this id
+    const exposureAnchoredNow = idMatches && exposureEndRef.current > 0;
+    const chainNowS = computeChainNow();
+    const exposureLeftNow = exposureAnchoredNow
+      ? Math.max(0, exposureEndRef.current - chainNowS)
+      : 0;
+    const guardActiveNow = Date.now() < gloryGuardUntilRef.current;
+    return guardActiveNow || (exposureAnchoredNow && exposureLeftNow > 0);
+  }
+
   // We need qc/publicClient and nowSec earlier for sync hooks below
   const qc = useQueryClient();
   const publicClient = usePublicClient();
@@ -1527,6 +1542,9 @@ function useGameSnapshot() {
       startTime && B0secs && winGlory ? startTime + B0secs + winGlory : 0;
     if (predEnd <= 0) return;
 
+    // IMPORTANT: do not anchor from glory while still in exposure or guard
+    if (suppressGloryAnchorNow()) return;
+
     // If gloryRemaining == gRem, then chain "now" ≈ predEnd - gRem
     const anchorEpoch = predEnd - gRem;
     chainNowRef.current = { epoch: anchorEpoch, fetchedAt: Date.now() };
@@ -1598,8 +1616,13 @@ function useGameSnapshot() {
     if (startTime && winPostImm) {
       const e = startTime + winPostImm;
       if (e > 0) immEndRef.current = Math.max(immEndRef.current, e);
+      if (lastIdRef.current === idBig) {
+        const immEndMs = e * 1000;
+        if (immEndMs > gloryGuardUntilRef.current)
+          gloryGuardUntilRef.current = immEndMs;
+      }
     }
-  }, [startTime, winPostImm]);
+  }, [startTime, winPostImm, idBig]);
 
   // "Show" gate base window
   React.useEffect(() => {
@@ -1747,7 +1770,12 @@ function useGameSnapshot() {
           if (fallbackEnd > 0 && Number.isFinite(rem) && rem >= 0) {
             candidates.push(fallbackEnd - rem);
           }
-          if (gloryEndPred > 0 && Number.isFinite(gRem) && gRem > 0) {
+          if (
+            gloryEndPred > 0 &&
+            Number.isFinite(gRem) &&
+            gRem > 0 &&
+            !suppressGloryAnchorNow()
+          ) {
             candidates.push(gloryEndPred - gRem);
           }
 
