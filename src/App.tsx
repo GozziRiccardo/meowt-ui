@@ -826,11 +826,15 @@ export function FinalizingMask({
   secondsLeft,
   imgUrl,
   message = "Congratulations! But it is now time for the kings of tomorrow..",
+  fadeIn = false,
 }: {
   secondsLeft: number;
   imgUrl?: string;
   message?: string;
+  fadeIn?: boolean;
 }) {
+  const [isVisible, setIsVisible] = React.useState(!fadeIn);
+
   React.useEffect(() => {
     const scrollY = window.scrollY;
     const prev = {
@@ -858,6 +862,17 @@ export function FinalizingMask({
     window.addEventListener("beforeunload", preventNav);
     return () => window.removeEventListener("beforeunload", preventNav);
   }, []);
+
+  React.useEffect(() => {
+    if (fadeIn && !isVisible) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setIsVisible(true);
+        });
+      });
+    }
+  }, [fadeIn, isVisible]);
+
   return createPortal(
     <div
       className="fixed inset-0 z-[99999] pointer-events-auto"
@@ -870,11 +885,27 @@ export function FinalizingMask({
         left: 0,
         right: 0,
         bottom: 0,
+        opacity: isVisible ? 1 : 0,
+        transition: fadeIn ? "opacity 800ms ease-in-out" : "none",
       }}
     >
-      <div className="absolute inset-0 bg-black/90" />
+      <div
+        className="absolute inset-0 bg-black/90"
+        style={{
+          transition: fadeIn ? "background-color 800ms ease-in-out" : "none",
+        }}
+      />
       {imgUrl && (
-        <div className="absolute inset-0 flex items-center justify-center">
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          style={{
+            opacity: isVisible ? 1 : 0,
+            transform: isVisible ? "scale(1)" : "scale(0.95)",
+            transition: fadeIn
+              ? "opacity 800ms ease-in-out, transform 800ms ease-in-out"
+              : "none",
+          }}
+        >
           <img
             src={imgUrl}
             alt=""
@@ -886,7 +917,14 @@ export function FinalizingMask({
       )}
       <div
         className="absolute left-0 right-0 flex justify-center"
-        style={{ top: "calc(16px + env(safe-area-inset-top, 0px))" }}
+        style={{
+          top: "calc(16px + env(safe-area-inset-top, 0px))",
+          opacity: isVisible ? 1 : 0,
+          transform: isVisible ? "translateY(0)" : "translateY(-10px)",
+          transition: fadeIn
+            ? "opacity 800ms ease-in-out 200ms, transform 800ms ease-in-out 200ms"
+            : "none",
+        }}
       >
         <div className="px-3 py-1.5 rounded-full text-sm font-semibold bg-black/85 text-white shadow-md">
           {message} {secondsLeft}s
@@ -2105,6 +2143,8 @@ function ActiveCard() {
   const gloryMaskTriggeredRef = React.useRef(false);
   const lastGloryMsgRef = React.useRef<bigint>(msgId ?? 0n);
   const lastGlorySecRef = React.useRef(glorySec);
+  const [gloryMaskVisible, setGloryMaskVisible] = React.useState(false);
+  const [gloryMaskShouldFade, setGloryMaskShouldFade] = React.useState(false);
 
   React.useEffect(() => {
     const persisted = readMaskState(GLORY_MASK_KEY);
@@ -2119,6 +2159,8 @@ function ActiveCard() {
 
     if (persisted.until > nowSec) {
       gloryMaskUntilRef.current = persisted.until;
+      setGloryMaskVisible(true);
+      setGloryMaskShouldFade(false);
     }
   }, []);
 
@@ -2128,9 +2170,20 @@ function ActiveCard() {
 
     if (msgId && msgId !== gloryMaskMessageIdRef.current) {
       gloryMaskTriggeredRef.current = false;
+      setGloryMaskVisible(false);
+      setGloryMaskShouldFade(false);
     }
 
     const sameMessage = prevMsgId === (msgId ?? 0n);
+    if (
+      sameMessage &&
+      glorySec > 0 &&
+      glorySec <= GLORY_MASK_LEAD_SECS + 0.5 &&
+      !gloryMaskVisible
+    ) {
+      setGloryMaskVisible(true);
+      setGloryMaskShouldFade(true);
+    }
     const gloryJustTransitioned = sameMessage && prevGlorySec > 0 && glorySec === 0;
     const gloryAboutToEnd =
       sameMessage &&
@@ -2152,6 +2205,8 @@ function ActiveCard() {
         gloryMaskUntilRef.current = until;
         gloryMaskMessageIdRef.current = msgId;
         gloryMaskTriggeredRef.current = true;
+        setGloryMaskVisible(true);
+        setGloryMaskShouldFade(true);
 
         writeMaskUntil(GLORY_MASK_KEY, until, {
           messageId: msgId,
@@ -2162,12 +2217,14 @@ function ActiveCard() {
 
     lastGloryMsgRef.current = msgId ?? 0n;
     lastGlorySecRef.current = glorySec;
-  }, [glorySec, msgId, nowSec, snap]);
+  }, [glorySec, msgId, nowSec, snap, gloryMaskVisible]);
 
   React.useEffect(() => {
     if (gloryMaskUntilRef.current > 0 && nowSec >= gloryMaskUntilRef.current) {
       const lastGloryId = gloryMaskMessageIdRef.current;
       gloryMaskUntilRef.current = 0;
+      setGloryMaskVisible(false);
+      setGloryMaskShouldFade(false);
       writeMaskUntil(GLORY_MASK_KEY, 0, { messageId: lastGloryId, type: "glory" });
     }
   }, [nowSec]);
@@ -2216,6 +2273,8 @@ function ActiveCard() {
       });
 
       gloryMaskUntilRef.current = 0;
+      setGloryMaskVisible(false);
+      setGloryMaskShouldFade(false);
       writeMaskUntil(GLORY_MASK_KEY, 0);
     }
   }, [hasActive, currentMessage, msgId, nowSec]);
@@ -2285,6 +2344,8 @@ function ActiveCard() {
 
       gloryMaskUntilRef.current = 0;
       nukeMaskUntilRef.current = 0;
+      setGloryMaskVisible(false);
+      setGloryMaskShouldFade(false);
       writeMaskUntil(GLORY_MASK_KEY, 0);
       writeMaskUntil(NUKE_MASK_KEY, 0);
     }
@@ -2343,7 +2404,7 @@ function ActiveCard() {
   const masksSuppressed =
     maskSuppressionUntilRef.current > 0 && nowSec < maskSuppressionUntilRef.current;
 
-  const effectiveShowGloryMask = showGloryMask && !masksSuppressed;
+  const effectiveShowGloryMask = gloryMaskVisible && !masksSuppressed;
   const effectiveShowNukeMask = showNukeMask && !masksSuppressed;
   const effectiveShowModMask = showModMask && !masksSuppressed;
 
@@ -2609,7 +2670,11 @@ function ActiveCard() {
         />
       )}
       {!effectiveShowModMask && !effectiveShowNukeMask && effectiveShowGloryMask && (
-        <FinalizingMask secondsLeft={gloryMaskLeft} imgUrl="/overlays/finalizing.png" />
+        <FinalizingMask
+          secondsLeft={Math.max(0, gloryMaskLeft || (GLORY_MASK_LEAD_SECS + 0.5))}
+          imgUrl="/overlays/finalizing.png"
+          fadeIn={gloryMaskShouldFade}
+        />
       )}
 
       {(snap as any).loading ? (
