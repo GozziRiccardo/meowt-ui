@@ -617,6 +617,9 @@ function parseMaskMessageId(raw?: string | null): bigint {
   }
 }
 
+// Persisted immunity end (seconds) keyed by message id
+const IMMUNITY_KEY = "meowt:imm:end";
+
 
 
 
@@ -1131,6 +1134,53 @@ function useGameSnapshot() {
   const GLORY_ON_POST_GUARD_MS = 1200;
   const { quiet } = useQuiet();
 
+  // Detect BroadcastChannel support (gate leader mode)
+  const bcSupported =
+    typeof window !== "undefined" && typeof (window as any).BroadcastChannel === "function";
+  // Simple lease-based leader election using localStorage (10s lease).
+  function usePollLeadership(active: boolean) {
+    const [isLeader, setIsLeader] = React.useState(true);
+    React.useEffect(() => {
+      if (!active) { setIsLeader(true); return; } // fail-open: all poll if BC unsupported
+      const key = "meowt:poll-leader";
+      const leaseMs = 10_000;
+
+      const tick = () => {
+        const now = Date.now();
+        try {
+          const raw = localStorage.getItem(key);
+          const until = raw ? parseInt(raw, 10) : 0;
+          if (!until || now > until) {
+            localStorage.setItem(key, String(now + leaseMs));
+            setIsLeader(true);
+            return;
+          }
+          const amLeader = now + 3000 < until;
+          if (amLeader) {
+            // Renew our lease
+            localStorage.setItem(key, String(now + leaseMs));
+          }
+          setIsLeader(amLeader);
+        } catch {
+          setIsLeader(true); // fail-open
+        }
+      };
+
+      tick();
+      const iv = setInterval(tick, 4000);
+      const onVis = () => document.visibilityState === "visible" && tick();
+      document.addEventListener("visibilitychange", onVis);
+      window.addEventListener("focus", tick, true);
+      return () => {
+        clearInterval(iv);
+        document.removeEventListener("visibilitychange", onVis);
+        window.removeEventListener("focus", tick, true);
+      };
+    }, [active]);
+    return isLeader;
+  }
+  const isLeader = usePollLeadership(bcSupported);
+
   // -------- Boot anti-ghost settings --------
   const BOOT_MODE_MS = 2500;
   const APP_BOOT_TS = React.useRef(Date.now()).current;
@@ -1231,11 +1281,11 @@ function useGameSnapshot() {
     functionName: "remainingSeconds",
     args: [idBig],
     query: {
-      enabled: hasId && !quiet,
+      enabled: hasId && !quiet && isLeader,
       staleTime: 0,
       // IMPORTANT: on focus, fetch immediately so the tab "catches up"
       refetchOnWindowFocus: true,
-      refetchInterval: 1000,
+      refetchInterval: 2500,
     },
   });
 
@@ -1244,10 +1294,10 @@ function useGameSnapshot() {
     abi: GAME_ABI,
     functionName: "gloryRemaining",
     query: {
-      enabled: hasId && !quiet,
+      enabled: hasId && !quiet && isLeader,
       staleTime: 0,
       refetchOnWindowFocus: true,
-      refetchInterval: 1000,
+      refetchInterval: 2500,
     },
   });
 
@@ -1257,10 +1307,10 @@ function useGameSnapshot() {
     abi: GAME_ABI,
     functionName: "boostedRemaining",
     query: {
-      enabled: hasId && !quiet,
+      enabled: hasId && !quiet && isLeader,
       staleTime: 0,
       refetchOnWindowFocus: true,
-      refetchInterval: 1000,
+      refetchInterval: 2500,
       placeholderData: (p) => p,
     },
   });
@@ -1270,10 +1320,10 @@ function useGameSnapshot() {
     abi: GAME_ABI,
     functionName: "boostCooldownRemaining",
     query: {
-      enabled: hasId && !quiet,
+      enabled: hasId && !quiet && isLeader,
       staleTime: 0,
       refetchOnWindowFocus: true,
-      refetchInterval: 1000,
+      refetchInterval: 2500,
       placeholderData: (p) => p,
     },
   });
@@ -1354,6 +1404,7 @@ function useGameSnapshot() {
 
   // -------- Cross-tab sync (BroadcastChannel) --------
   const bcRef = React.useRef<BroadcastChannel | null>(null);
+
   const lastAnchorFromPeer = React.useRef<number>(0);
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1385,6 +1436,10 @@ function useGameSnapshot() {
       } else if (data.t === "cooldownEnd" && Number.isFinite(data.end)) {
         cooldownEndRef.current = Math.max(cooldownEndRef.current, Number(data.end));
         nudgeQueries(qc, [0, 300]);
+      } else if (data.t === "immEnd" && Number.isFinite(data.end)) {
+        // only ever extend, never shrink
+        immEndRef.current = Math.max(immEndRef.current, Number(data.end));
+        nudgeQueries(qc, [0, 200]);
       }
     };
     bcRef.current?.addEventListener("message", onMsg as any);
@@ -1413,6 +1468,11 @@ function useGameSnapshot() {
   function broadcastCooldownEnd(end: number) {
     try {
       bcRef.current?.postMessage({ t: "cooldownEnd", end, at: Date.now() });
+    } catch {}
+  }
+  function broadcastImmEnd(end: number) {
+    try {
+      bcRef.current?.postMessage({ t: "immEnd", end, at: Date.now() });
     } catch {}
   }
 
@@ -1447,6 +1507,19 @@ function useGameSnapshot() {
   const lastStartRef = React.useRef<number>(0);
   const lastContentKeyRef = React.useRef<string>("");
   const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
+
+  // Rehydrate persisted immunity end for this message id (instant UI on refresh)
+  React.useEffect(() => {
+    if (!hasId || !idBig) return;
+    try {
+      const nowS = Math.floor(Date.now() / 1000);
+      const persisted = readMaskState(IMMUNITY_KEY);
+      const pid = parseMaskMessageId(persisted?.messageId);
+      if (pid === idBig && Number.isFinite(persisted?.until) && persisted!.until > nowS) {
+        immEndRef.current = Math.max(immEndRef.current, persisted!.until);
+      }
+    } catch {}
+  }, [hasId, idBig]);
 
   // Boot & id-change holds
   const bootHold = Date.now() - APP_BOOT_TS < INIT_HOLD_MS;
@@ -1662,6 +1735,13 @@ function useGameSnapshot() {
       if (lastIdRef.current === idBig && e > gloryGuardUntilRef.current) {
         gloryGuardUntilRef.current = e; // seconds
       }
+      // Persist and broadcast immunity end so refreshes and other tabs show it instantly
+      if (lastIdRef.current === idBig && e > 0) {
+        try {
+          writeMaskUntil(IMMUNITY_KEY, e, { messageId: idBig });
+        } catch {}
+        broadcastImmEnd(e);
+      }
     }
   }, [startTime, winPostImm, idBig]);
 
@@ -1870,6 +1950,14 @@ function useGameSnapshot() {
       } catch {
         /* ignore network hiccups; we'll still nudge queries below */
       }
+      try {
+        const persisted = readMaskState(IMMUNITY_KEY);
+        const pid = parseMaskMessageId(persisted?.messageId);
+        const nowS = Math.floor(Date.now() / 1000);
+        if (pid === idBig && Number.isFinite(persisted?.until) && persisted!.until > nowS) {
+          immEndRef.current = Math.max(immEndRef.current, persisted!.until);
+        }
+      } catch {}
       nudgeQueries(qc, [0, 120, 600, 1400]);
       broadcastNudge();
     };
@@ -4178,7 +4266,7 @@ function HeartbeatRefresher() {
     let stopped = false;
     const iv = window.setInterval(() => {
       if (!stopped) nudgeQueries(qc, [0]);
-    }, 2000);
+    }, 4000);
     return () => {
       stopped = true;
       window.clearInterval(iv);
