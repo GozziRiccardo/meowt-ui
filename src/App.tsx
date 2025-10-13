@@ -1575,6 +1575,7 @@ function useGameSnapshot() {
   const bootConfirmed = idConfirmOk === idBig || liveProof || (mLoaded && !definitelyOver);
 
   React.useEffect(() => {
+    // Re-anchor clocks when the tab becomes active again (focus/pageshow/visibility)
     if (typeof window === "undefined" || typeof document === "undefined") return;
     let cancelled = false;
     const reanchor = async () => {
@@ -1586,6 +1587,7 @@ function useGameSnapshot() {
             address: GAME as `0x${string}`,
             abi: GAME_ABI,
             functionName: "remainingSeconds",
+            // keep args in sync with useReadContract above
             args: [idBig],
           })) as bigint;
           const fallbackEnd =
@@ -1601,10 +1603,46 @@ function useGameSnapshot() {
             broadcastAnchor(anchorEpoch);
           }
         }
+
+        // ---- FAST-PATH: snap boost/glory/cooldown right away on focus ----
+        // This updates the end refs immediately so the UI feels instant,
+        // without waiting for TanStack refetch to complete.
+        if (hasId && publicClient) {
+          try {
+            const [glory, boosted, cooldown] = await Promise.all([
+              publicClient.readContract({
+                address: GAME as `0x${string}`,
+                abi: GAME_ABI,
+                functionName: "gloryRemaining",
+              }) as Promise<bigint>,
+              publicClient.readContract({
+                address: GAME as `0x${string}`,
+                abi: GAME_ABI,
+                functionName: "boostedRemaining",
+              }) as Promise<bigint>,
+              publicClient.readContract({
+                address: GAME as `0x${string}`,
+                abi: GAME_ABI,
+                functionName: "boostCooldownRemaining",
+              }) as Promise<bigint>,
+            ]);
+            if (cancelled) return;
+            const nowS = Math.floor(Date.now() / 1000);
+            const g = Number(glory ?? 0n);
+            const b = Number(boosted ?? 0n);
+            const c = Number(cooldown ?? 0n);
+            if (g > 0) gloryEndRef.current = Math.max(gloryEndRef.current, nowS + g);
+            if (b > 0) boostEndRef.current = Math.max(boostEndRef.current, nowS + b);
+            if (c > 0)
+              cooldownEndRef.current = Math.max(cooldownEndRef.current, nowS + c);
+          } catch {
+            /* ignore */
+          }
+        }
       } catch {
-        /* ignore */
+        /* ignore network hiccups; we'll still nudge queries below */
       }
-      nudgeQueries(qc, [0, 500]);
+      nudgeQueries(qc, [0, 120, 600, 1400]);
       broadcastNudge();
     };
     const onVis = () => document.visibilityState === "visible" && reanchor();
