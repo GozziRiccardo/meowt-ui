@@ -1465,16 +1465,39 @@ function useGameSnapshot() {
     broadcastAnchor(anchorEpoch);
   }, [remChainBN, endTsNum, startTime, B0secs, computeChainNow]);
 
+  // NEW: anchor chain "now" during glory so all tabs/devices stay in lockstep
+  React.useEffect(() => {
+    const gRem = Number(gloryRemChainBN ?? 0n);
+    if (!Number.isFinite(gRem) || gRem <= 0) return;
+
+    // Predicted end of glory from message data (authoritative & same everywhere)
+    const predEnd =
+      startTime && B0secs && winGlory ? startTime + B0secs + winGlory : 0;
+    if (predEnd <= 0) return;
+
+    // If gloryRemaining == gRem, then chain "now" ≈ predEnd - gRem
+    const anchorEpoch = predEnd - gRem;
+    chainNowRef.current = { epoch: anchorEpoch, fetchedAt: Date.now() };
+    setNowSec((prev) => Math.max(prev, computeChainNow()));
+    broadcastAnchor(anchorEpoch); // keep other tabs/devices synced
+  }, [gloryRemChainBN, startTime, B0secs, winGlory, computeChainNow]);
+
   // Glory window
   React.useEffect(() => {
     const predicted = startTime && B0secs && winGlory ? startTime + B0secs + winGlory : 0;
     if (predicted > 0) gloryEndRef.current = Math.max(gloryEndRef.current, predicted);
   }, [startTime, B0secs, winGlory]);
-  
+
   React.useEffect(() => {
     const chainGlory = Number(gloryRemChainBN ?? 0n);
-    if (chainGlory > 0) gloryEndRef.current = Math.max(gloryEndRef.current, nowSec + chainGlory);
-  }, [gloryRemChainBN, nowSec]);
+    if (chainGlory > 0) {
+      const predEnd =
+        startTime && B0secs && winGlory
+          ? startTime + B0secs + winGlory
+          : nowSec + chainGlory; // fallback if metadata missing
+      gloryEndRef.current = Math.max(gloryEndRef.current, predEnd);
+    }
+  }, [gloryRemChainBN, startTime, B0secs, winGlory, nowSec]);
   
   React.useEffect(() => {
     const exp = exposureEndRef.current;
