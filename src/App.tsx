@@ -2175,6 +2175,20 @@ function ActiveCard() {
     }
 
     const sameMessage = prevMsgId === (msgId ?? 0n);
+    if (!sameMessage) {
+      if (
+        gloryMaskUntilRef.current > 0 ||
+        gloryMaskVisible ||
+        gloryMaskTriggeredRef.current
+      ) {
+        gloryMaskUntilRef.current = 0;
+        gloryMaskTriggeredRef.current = false;
+        setGloryMaskVisible(false);
+        setGloryMaskShouldFade(false);
+        writeMaskUntil(GLORY_MASK_KEY, 0);
+      }
+    }
+
     if (
       sameMessage &&
       glorySec > 0 &&
