@@ -1235,12 +1235,13 @@ function useGameSnapshot() {
     query: {
       enabled: hasId && !quiet,
       staleTime: 0,
-      refetchOnWindowFocus: false,
+      // IMPORTANT: on focus, fetch immediately so the tab "catches up"
+      refetchOnWindowFocus: true,
       refetchInterval: 1000,
       placeholderData: (p) => p,
     },
   });
-  
+
   const { data: gloryRemChainBN } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
@@ -1248,7 +1249,7 @@ function useGameSnapshot() {
     query: {
       enabled: hasId && !quiet,
       staleTime: 0,
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: true,
       refetchInterval: 1000,
       placeholderData: (p) => p,
     },
@@ -1299,7 +1300,10 @@ function useGameSnapshot() {
     }
     return Math.floor(Date.now() / 1000);
   }, []);
-  
+
+  // We need qc/publicClient and nowSec earlier for sync hooks below
+  const qc = useQueryClient();
+  const publicClient = usePublicClient();
   const [nowSec, setNowSec] = React.useState(() => computeChainNow());
   React.useEffect(() => {
     const iv = setInterval(
@@ -1308,6 +1312,50 @@ function useGameSnapshot() {
     );
     return () => clearInterval(iv);
   }, [computeChainNow]);
+
+  // -------- Cross-tab sync (BroadcastChannel) --------
+  const bcRef = React.useRef<BroadcastChannel | null>(null);
+  const lastAnchorFromPeer = React.useRef<number>(0);
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      bcRef.current = new BroadcastChannel("meowt-sync-v1");
+    } catch {
+      bcRef.current = null;
+    }
+    const onMsg = (evt: MessageEvent) => {
+      const data: any = evt?.data;
+      if (!data || typeof data !== "object") return;
+      if (data.t === "anchor" && Number.isFinite(data.epoch) && Number.isFinite(data.at)) {
+        const at = Number(data.at);
+        if (at > lastAnchorFromPeer.current) {
+          lastAnchorFromPeer.current = at;
+          chainNowRef.current = { epoch: Number(data.epoch), fetchedAt: at };
+          setNowSec((prev) => Math.max(prev, computeChainNow()));
+          nudgeQueries(qc, [0, 120, 600]);
+        }
+      } else if (data.t === "nudge") {
+        nudgeQueries(qc, [0, 120, 600]);
+      }
+    };
+    bcRef.current?.addEventListener("message", onMsg as any);
+    return () => {
+      bcRef.current?.removeEventListener("message", onMsg as any);
+      bcRef.current?.close();
+      bcRef.current = null;
+    };
+  }, [computeChainNow, qc]);
+
+  function broadcastAnchor(epoch: number) {
+    try {
+      bcRef.current?.postMessage({ t: "anchor", epoch, at: Date.now() });
+    } catch {}
+  }
+  function broadcastNudge() {
+    try {
+      bcRef.current?.postMessage({ t: "nudge" });
+    } catch {}
+  }
 
   // Refs and latches
   const lastIdRef = React.useRef<bigint>(0n);
@@ -1376,6 +1424,7 @@ function useGameSnapshot() {
     if (!Number.isFinite(anchorEpoch)) return;
     chainNowRef.current = { epoch: anchorEpoch, fetchedAt: Date.now() };
     setNowSec((prev) => Math.max(prev, computeChainNow()));
+    broadcastAnchor(anchorEpoch);
   }, [remChainBN, endTsNum, startTime, B0secs, computeChainNow]);
 
   // Glory window
@@ -1454,8 +1503,6 @@ function useGameSnapshot() {
   const replaceLocked = Boolean(replaceBlocked) || lockLeft > 0;
 
   // Proof-of-life and definitely-over guards
-  const publicClient = usePublicClient();
-
   const [idConfirmOk, setIdConfirmOk] = React.useState<bigint | 0n>(0n);
   React.useEffect(() => {
     setIdConfirmOk(0n);
@@ -1486,6 +1533,51 @@ function useGameSnapshot() {
   const definitelyOver = !!mLoaded && hardOverAt > 0 && nowSec >= hardOverAt;
 
   const bootConfirmed = idConfirmOk === idBig || liveProof || (mLoaded && !definitelyOver);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    let cancelled = false;
+    const reanchor = async () => {
+      if (cancelled) return;
+      try {
+        setNowSec((prev) => Math.max(prev, computeChainNow()));
+        if (hasId && publicClient) {
+          const rem = (await publicClient.readContract({
+            address: GAME as `0x${string}`,
+            abi: GAME_ABI,
+            functionName: "remainingSeconds",
+            args: [idBig],
+          })) as bigint;
+          const fallbackEnd =
+            exposureEndRef.current > 0
+              ? exposureEndRef.current
+              : startTime && B0secs
+              ? startTime + B0secs
+              : 0;
+          if (fallbackEnd > 0) {
+            const anchorEpoch = fallbackEnd - Number(rem ?? 0n);
+            chainNowRef.current = { epoch: anchorEpoch, fetchedAt: Date.now() };
+            setNowSec((prev) => Math.max(prev, computeChainNow()));
+            broadcastAnchor(anchorEpoch);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      nudgeQueries(qc, [0, 120, 600, 1400]);
+      broadcastNudge();
+    };
+    const onVis = () => document.visibilityState === "visible" && reanchor();
+    window.addEventListener("focus", reanchor, true);
+    window.addEventListener("pageshow", reanchor);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", reanchor, true);
+      window.removeEventListener("pageshow", reanchor);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [qc, publicClient, hasId, idBig, computeChainNow, startTime, B0secs]);
 
   // Final "show" decision
   const untilShow = Math.max(
