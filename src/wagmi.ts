@@ -1,9 +1,9 @@
 // src/wagmi.ts
-import { createConfig, http } from 'wagmi'
+import { createConfig } from 'wagmi'
 import type { CreateConnectorFn } from 'wagmi'
 import { base, baseSepolia } from 'wagmi/chains'
 import { coinbaseWallet, injected, metaMask, walletConnect } from 'wagmi/connectors'
-import { fallback } from 'viem'
+import { http, fallback } from 'viem'
 
 // --- Env helpers -------------------------------------------------------------
 const VITE = import.meta.env as any
@@ -38,7 +38,11 @@ function buildBaseHttpFallback(kind: 'mainnet' | 'sepolia') {
   const envUrl = kind === 'mainnet' ? VITE?.VITE_BASE_RPC : VITE?.VITE_BASE_SEPOLIA_RPC
   const alchemyUrl = kind === 'mainnet' ? ALCHEMY_BASE_HTTP : ALCHEMY_SEPOLIA_HTTP
   const officialUrl = kind === 'mainnet' ? 'https://mainnet.base.org' : 'https://sepolia.base.org'
-  const candidates = [envUrl, alchemyUrl, officialUrl].filter(Boolean) as string[]
+  const extraMainnet =
+    kind === 'mainnet'
+      ? ['https://base-rpc.publicnode.com', 'https://rpc.ankr.com/base']
+      : []
+  const candidates = [envUrl, alchemyUrl, ...extraMainnet, officialUrl].filter(Boolean) as string[]
   return fallback(candidates.map((u) => resilientHttp(u)), { retryCount: 2 })
 }
 
