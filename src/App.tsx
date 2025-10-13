@@ -2353,6 +2353,14 @@ function ActiveCard() {
       ? Math.max(0, gloryUntilRef.current - (MASK_SECS + GLORY_MASK_LATCH_PAD))
       : 0;
   const gloryEndingSoon = glorySec > 0 && glorySec <= GLORY_MASK_LATCH_PAD;
+  const predictedGloryEnd = gloryEndRef.current;
+  const predictedMaskEnd =
+    predictedGloryEnd > 0
+      ? Math.min(
+          predictedGloryEnd + maskSecsRef.current,
+          predictedGloryEnd + gloryMaskSpanRef.current,
+        )
+      : 0;
   const latchedGloryMask =
     gloryUntilRef.current > 0 &&
     now >= latchPadStart &&
@@ -2362,14 +2370,28 @@ function ActiveCard() {
     !!(gloryMaskMessageIdRef.current && msgId && msgId !== 0n) &&
     gloryMaskMessageIdRef.current === msgId;
 
+  const inPredictedLatchWindow =
+    predictedGloryEnd > 0 &&
+    now >= predictedGloryEnd - GLORY_MASK_LATCH_PAD &&
+    now < predictedMaskEnd;
+
   const showGloryMask =
-    (gloryEndingSoon && gloryIdMatches) ||
-    (latchedGloryMask && gloryIdMatches);
+    gloryEndingSoon ||
+    (latchedGloryMask && gloryIdMatches) ||
+    inPredictedLatchWindow;
 
   // Remaining seconds come from the *target end*, never a max() of sources
-  const targetEnd =
-    glorySec > 0 ? now + glorySec + MASK_SECS : gloryUntilRef.current;
-  const gloryMaskLeft = showGloryMask ? Math.max(0, targetEnd - now) : 0;
+  const runtimeEndWhenLive = glorySec > 0 ? now + glorySec + MASK_SECS : 0;
+  const persistedEnd = gloryUntilRef.current > 0 ? gloryUntilRef.current : 0;
+  const bestMaskEnd = (() => {
+    const candidates = [predictedMaskEnd, persistedEnd, runtimeEndWhenLive].filter(
+      Boolean,
+    ) as number[];
+    return candidates.length
+      ? Math.min(...candidates.filter((n) => Number.isFinite(n) && n > 0))
+      : 0;
+  })();
+  const gloryMaskLeft = showGloryMask ? Math.max(0, bestMaskEnd - now) : 0;
 
   // ========= MOD / NUKE MASKS =========
   const NUKE_MASK_SECS = MASK_SECS;
