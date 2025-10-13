@@ -550,6 +550,47 @@ function readMaskState(key: string): MaskPersisted {
   }
 }
 
+// ---- Window times persistence (refresh resilience) ----
+const WINDOW_TIMES_KEY = "meowt:window:times";
+type WindowTimes = {
+  messageId: string;
+  exposureEnd?: number;
+  gloryEnd?: number;
+  immEnd?: number;
+  timestamp: number;
+};
+
+function readWindowTimes(messageId: bigint): WindowTimes | null {
+  if (!messageId || messageId === 0n) return null;
+  try {
+    const raw = localStorage.getItem(WINDOW_TIMES_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as WindowTimes;
+    if (parsed.messageId !== String(messageId)) return null;
+    if (Date.now() - parsed.timestamp > 5 * 60 * 1000) return null; // TTL 5m
+    return parsed;
+  } catch { return null; }
+}
+
+function writeWindowTimes(
+  messageId: bigint,
+  exposureEnd: number,
+  gloryEnd: number,
+  immEnd: number
+) {
+  if (!messageId || messageId === 0n) return;
+  try {
+    const payload: WindowTimes = {
+      messageId: String(messageId),
+      exposureEnd: exposureEnd > 0 ? exposureEnd : undefined,
+      gloryEnd: gloryEnd > 0 ? gloryEnd : undefined,
+      immEnd: immEnd > 0 ? immEnd : undefined,
+      timestamp: Date.now(),
+    };
+    localStorage.setItem(WINDOW_TIMES_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
 const MASK_EVENT = "meowt:mask:update";
 type MaskEventDetail = { key: string; until: number; messageId?: string | null };
 
@@ -1512,50 +1553,63 @@ function useGameSnapshot() {
   const lastContentKeyRef = React.useRef<string>("");
   const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
 
-  // Fast prime of exposure/glory ends on mount & id changes (refresh resilience)
+  // Fast prime of window ends via chain reads (refresh resilience)
   React.useEffect(() => {
     if (!hasId || !publicClient || !idBig) return;
     let cancelled = false;
+
     (async () => {
       try {
-        // Read endTime(id) + windows (winGlory) directly to compute a predicted glory end
-        const [endBn, wins] = await Promise.all([
-          publicClient.readContract({
-            address: GAME as `0x${string}`,
-            abi: GAME_ABI,
-            functionName: "endTime",
-            args: [idBig],
-            blockTag: "latest",
-          }).catch(() => 0n),
-          publicClient.readContract({
-            address: GAME as `0x${string}`,
-            abi: GAME_ABI,
-            functionName: "windows",
-            blockTag: "latest",
-          }).catch(() => null),
+        const [endBn, wins, gloryRemBn] = await Promise.all([
+          publicClient
+            .readContract({
+              address: GAME as `0x${string}`,
+              abi: GAME_ABI,
+              functionName: "endTime",
+              args: [idBig],
+            })
+            .catch(() => 0n),
+          publicClient
+            .readContract({
+              address: GAME as `0x${string}`,
+              abi: GAME_ABI,
+              functionName: "windows",
+            })
+            .catch(() => null),
+          publicClient
+            .readContract({
+              address: GAME as `0x${string}`,
+              abi: GAME_ABI,
+              functionName: "gloryRemaining",
+            })
+            .catch(() => 0n),
         ]);
-
         if (cancelled) return;
 
         const eNum = Number(endBn ?? 0n);
         const gWin = Number((wins as any)?.[1] ?? 0n);
+        const gloryRem = Number(gloryRemBn ?? 0n);
 
         if (eNum > 0) {
-          // Prime exposure end immediately
           exposureEndRef.current = Math.max(exposureEndRef.current, eNum);
           if (gWin > 0) {
-            // Prime predicted glory end and show-latch to prevent flicker into immunity/post
-            const gEnd = eNum + gWin;
-            gloryEndRef.current = Math.max(gloryEndRef.current, gEnd);
-            showUntilRef.current = Math.max(showUntilRef.current, gEnd);
-            setNowSec((prev) => Math.max(prev, computeChainNow()));
-            broadcastNudge();
+            const predictedGloryEnd = eNum + gWin;
+            gloryEndRef.current = Math.max(gloryEndRef.current, predictedGloryEnd);
+            showUntilRef.current = Math.max(showUntilRef.current, predictedGloryEnd);
+            if (gloryRem > 0) {
+              const gloryAnchorEpoch = predictedGloryEnd - gloryRem;
+              chainNowRef.current = { epoch: gloryAnchorEpoch, fetchedAt: Date.now() };
+              setNowSec((prev) => Math.max(prev, computeChainNow()));
+              broadcastAnchor(gloryAnchorEpoch);
+            }
           }
         }
-      } catch {
-        /* noop: live reads will correct shortly */
-      }
+        if (idBig && exposureEndRef.current > 0) {
+          writeWindowTimes(idBig, exposureEndRef.current, gloryEndRef.current, immEndRef.current);
+        }
+      } catch { /* ignore */ }
     })();
+
     return () => { cancelled = true; };
   }, [hasId, idBig, publicClient, computeChainNow]);
 
@@ -1610,6 +1664,19 @@ function useGameSnapshot() {
       }
     }
   }, [hasId, idBig, booting, OPTIMISTIC_SHOW_MS, ID_CHANGE_HOLD_MS, computeChainNow]);
+
+  React.useEffect(() => {
+    if (!hasId || !idBig) return;
+    const persisted = readWindowTimes(idBig);
+    if (persisted) {
+      if (persisted.exposureEnd)
+        exposureEndRef.current = Math.max(exposureEndRef.current, persisted.exposureEnd);
+      if (persisted.gloryEnd)
+        gloryEndRef.current = Math.max(gloryEndRef.current, persisted.gloryEnd);
+      if (persisted.immEnd)
+        immEndRef.current = Math.max(immEndRef.current, persisted.immEnd);
+    }
+  }, [hasId, idBig]);
 
   React.useEffect(() => {
     if (hasId) return;
@@ -1795,6 +1862,12 @@ function useGameSnapshot() {
       }
     }
   }, [startTime, winPostImm, idBig]);
+
+  React.useEffect(() => {
+    if (hasId && idBig && (exposureEndRef.current > 0 || gloryEndRef.current > 0 || immEndRef.current > 0)) {
+      writeWindowTimes(idBig, exposureEndRef.current, gloryEndRef.current, immEndRef.current);
+    }
+  }, [hasId, idBig, endTsNum, startTime, B0secs, winGlory, winPostImm]);
 
   // "Show" gate base window
   React.useEffect(() => {
@@ -2105,12 +2178,11 @@ function useGameSnapshot() {
         entry && typeof entry === "object" && ("result" in entry || "error" in entry),
       ));
   const stillFetchingActive = hasId && (!rawReady || (rawFetching && !rawReady));
-  const loadingState = Boolean(
-    bootHold || 
-    idChangeHold || 
-    waitingForId || 
-    stillFetchingActive
-  );
+
+  // If we have NO active message, never report loading → prevents “stuck waiting”
+  const loadingState = hasId
+    ? Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive)
+    : false;
 
   return {
     id: idBig,
@@ -2163,35 +2235,17 @@ function PostBox() {
   const snap = useSnap();
   if (!isConnected) return null;
 
-  // Chain/window and lock state
-  const chainWindowsClear =
-    ((snap as any)?.rem ?? 0n) <= 0n &&
-    Number((snap as any)?.gloryRem ?? 0) <= 0;
-  const anyLock = ((snap as any)?.lockKind ?? "none") !== "none";
-  const coolingDown = Number((snap as any)?.boostCooldownRem ?? 0) > 0;
-
-  // Predictive guard: if we know glory is ongoing by prediction, suppress PostBox
-  const nowSec = Number((snap as any)?.nowSec ?? 0);
-  const gEndPred = Number((snap as any)?.gloryPredictedEnd ?? 0);
-  const predictedGloryActive = gEndPred > 0 && nowSec > 0 &&
-    (Number((snap as any)?.rem ?? 0) === 0) &&
-    nowSec < gEndPred;
-
-  // Let "loading" hide the UI unless we *know* we are idle and unlocked.
-  // If windows are clear AND no locks/cooldowns, ignore a stale loading flag.
-  if ((snap as any)?.loading && !(chainWindowsClear && !anyLock && !coolingDown)) {
-    return null;
-  }
-
-  // Original guards
   const hasActive = Boolean((snap as any)?.show) && (((snap as any)?.rem ?? 0n) > 0n);
-  const isCrowning = Number((snap as any)?.gloryRem ?? 0) > 0;
+  const glorySec = Number((snap as any)?.gloryRem ?? 0);
+  const lockKind = String((snap as any)?.lockKind ?? "none");
+  const anyLock = lockKind !== "none";
 
-  // Never show Post UI during any lock or cooldown
-  if (hasActive || isCrowning || anyLock || predictedGloryActive || coolingDown) return null;
-
-  // Idle + unlocked → show Post UI
-  return <PostBoxInner />;
+  // If there's NO active message and NO locks and NOT crowning, show post box immediately,
+  // regardless of transient loading flags.
+  if (!hasActive && glorySec <= 0 && !anyLock) {
+    return <PostBoxInner />;
+  }
+  return null;
 }
 
 function PostBoxInner() {
