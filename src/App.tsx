@@ -135,7 +135,7 @@ const qc = new QueryClient({
       // never carry old data into a fresh mount/key
       placeholderData: undefined,
       keepPreviousData: false,
-      refetchOnMount: "always",
+      refetchOnMount: true,
       refetchOnWindowFocus: false,
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
@@ -150,7 +150,7 @@ const qc = new QueryClient({
 
 function nudgeQueries(
   qc: QueryClient,
-  delays: number[] = [0, 350, 1200]
+  delays: number[] = [0, 500]
 ) {
   const tick = () => {
     qc.invalidateQueries({ refetchType: "active" });
@@ -657,13 +657,6 @@ function PermanentTimerBar() {
   const rem = Number(remRaw);
 
   if (!Number.isFinite(rem) || rem <= 0) return null;
-
-  // Lightweight tick so the label stays fresh even between query nudges
-  const [, forceTick] = React.useState(0);
-  React.useEffect(() => {
-    const id = setInterval(() => forceTick((x) => x + 1), 500);
-    return () => clearInterval(id);
-  }, []);
 
   // Keep it compact but visible; group is centered
   return (
@@ -1211,7 +1204,6 @@ function useGameSnapshot() {
           { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "requiredStakeToReplace" },
           { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "voteFeeLike" },
           { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "voteFeeDislike" },
-          { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostCost" },
           { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostedRemaining" },
           { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "boostCooldownRemaining" },
           { address: GAME as `0x${string}`, abi: GAME_ABI, functionName: "isReplaceBlocked" },
@@ -1277,11 +1269,12 @@ function useGameSnapshot() {
   const endTsBN = hasId ? ((take(raw as any[], 1) ?? 0n) as bigint) : 0n;
   const feeLike = hasId ? (take(raw as any[], 3) as bigint | undefined) : undefined;
   const feeDislike = hasId ? (take(raw as any[], 4) as bigint | undefined) : undefined;
-  const boostCostRead = hasId ? (take(raw as any[], 5) as bigint | undefined) : undefined;
-  const boostedRemBN = hasId ? ((take(raw as any[], 6) ?? 0n) as bigint) : 0n;
-  const boostCooldownBN = hasId ? ((take(raw as any[], 7) ?? 0n) as bigint) : 0n;
-  const replaceBlocked = hasId ? Boolean(take(raw as any[], 8)) : false;
-  const winsTuple = hasId ? (take(raw as any[], 9) as readonly [bigint, bigint, bigint] | undefined) : undefined;
+  const boostedRemBN = hasId ? ((take(raw as any[], 5) ?? 0n) as bigint) : 0n;
+  const boostCooldownBN = hasId ? ((take(raw as any[], 6) ?? 0n) as bigint) : 0n;
+  const replaceBlocked = hasId ? Boolean(take(raw as any[], 7)) : false;
+  const winsTuple = hasId
+    ? (take(raw as any[], 8) as readonly [bigint, bigint, bigint] | undefined)
+    : undefined;
 
   const winPostImm = Number(winsTuple?.[0] ?? 300n);
   const winGlory = Number(winsTuple?.[1] ?? 300n);
@@ -1332,10 +1325,10 @@ function useGameSnapshot() {
           lastAnchorFromPeer.current = at;
           chainNowRef.current = { epoch: Number(data.epoch), fetchedAt: at };
           setNowSec((prev) => Math.max(prev, computeChainNow()));
-          nudgeQueries(qc, [0, 120, 600]);
+          nudgeQueries(qc, [0, 500]);
         }
       } else if (data.t === "nudge") {
-        nudgeQueries(qc, [0, 120, 600]);
+        nudgeQueries(qc, [0, 500]);
       }
     };
     bcRef.current?.addEventListener("message", onMsg as any);
@@ -1564,7 +1557,7 @@ function useGameSnapshot() {
       } catch {
         /* ignore */
       }
-      nudgeQueries(qc, [0, 120, 600, 1400]);
+      nudgeQueries(qc, [0, 500]);
       broadcastNudge();
     };
     const onVis = () => document.visibilityState === "visible" && reanchor();
@@ -1611,9 +1604,9 @@ function useGameSnapshot() {
   // Non-zero latch for boostCost
   const boostCostRef = React.useRef<bigint>(0n);
   React.useEffect(() => {
-    const v = (boostCostLive ?? boostCostRead ?? 0n) as bigint;
+    const v = (boostCostLive ?? 0n) as bigint;
     if (v > 0n) boostCostRef.current = v;
-  }, [boostCostLive, boostCostRead]);
+  }, [boostCostLive]);
 
   // FIXED: More precise loading state
   const rawReady =
@@ -1649,6 +1642,7 @@ function useGameSnapshot() {
     lockKind,
     lockLeft,
     loading: loadingState,
+    nowSec,
   } as const;
 }
 const GameSnapshotContext = React.createContext<ReturnType<typeof useGameSnapshot> | null>(null);
@@ -1779,7 +1773,7 @@ function PostBoxInner() {
           });
         } catch {}
 
-        nudgeQueries(qc, [0, 200, 800, 1600, 3000]);
+        nudgeQueries(qc, [0, 500, 1500]);
         writeMaskUntil(GLORY_MASK_KEY, 0);
       });
       setText("");
@@ -1951,7 +1945,7 @@ function ReplaceBoxInner() {
           });
         } catch {}
 
-        nudgeQueries(qc, [0, 200, 800, 1600, 3000]);
+        nudgeQueries(qc, [0, 500, 1500]);
         writeMaskUntil(GLORY_MASK_KEY, 0);
       });
       setToast("Replacement confirmed ✨");
@@ -2044,6 +2038,30 @@ function masksSuppressed(type?: string): boolean {
   return suppressedMaskTypes.has(type);
 }
 
+function MaskStorageSync() {
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const KEYS = [GLORY_MASK_KEY, NUKE_MASK_KEY, MOD_MASK_KEY];
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key || !KEYS.includes(e.key)) return;
+      try {
+        const payload = e.newValue ? JSON.parse(e.newValue) : { until: 0 };
+        const until = Number(payload?.until) || 0;
+        const messageId =
+          payload?.messageId === null || typeof payload?.messageId === "undefined"
+            ? undefined
+            : String(payload.messageId);
+        emitMaskUpdate(e.key, until, messageId);
+      } catch {
+        emitMaskUpdate(e.key, 0);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+  return null;
+}
+
 // -------------------- Active card (with masks & boost) --------------------
 
 function ActiveCard() {
@@ -2107,11 +2125,7 @@ function ActiveCard() {
   const glorySec = Number((snap as any)?.gloryRem ?? 0);
   const MASK_SECS = Number((snap as any)?.winFreeze ?? 11);
 
-  const [now, setNow] = React.useState(() => Math.floor(Date.now() / 1000));
-  React.useEffect(() => {
-    const iv = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 500);
-    return () => clearInterval(iv);
-  }, []);
+  const now = (snap as any)?.nowSec ?? Math.floor(Date.now() / 1000);
 
   // ========= POST-GLORY FREEZE MASK (clamped & de-flickered) =========
   const GLORY_MAX_SPAN =
@@ -2539,6 +2553,7 @@ function ActiveCard() {
   const messageForUi = showingModeratedFreeze ? modFrozenMessage!.message : currentMessage;
 
   async function confirmThenRefresh(hash?: `0x${string}`) {
+    let ok = false;
     try {
       if (hash && publicClient) {
         const r = await withRetry(
@@ -2547,9 +2562,10 @@ function ActiveCard() {
           300
         );
         if (r.status !== "success") throw new Error("Transaction reverted");
+        ok = true;
       }
     } finally {
-      nudgeQueries(qc, [0, 400, 1500]);
+      nudgeQueries(qc, ok ? [0, 500, 1500] : [0, 500]);
     }
   }
 
@@ -3666,42 +3682,41 @@ function WalletEventRefetch() {
 }
 
 function BlockRefresher() {
+  const { quiet } = useQuiet();
   const qc = useQueryClient();
   const { data: blockNumber } = useBlockNumber({
-    watch: true,
+    watch: !quiet,
     query: {
       staleTime: 0,
       refetchOnWindowFocus: false,
-      keepPreviousData: false,
     } as any,
   });
 
   const lastBlockRef = React.useRef<bigint | null>(null);
   React.useEffect(() => {
-    if (blockNumber === undefined || blockNumber === null) return;
+    if (quiet || blockNumber === undefined || blockNumber === null) return;
     if (lastBlockRef.current === blockNumber) return;
     lastBlockRef.current = blockNumber;
-    nudgeQueries(qc, [0, 350, 1400]);
-  }, [blockNumber, qc]);
+    nudgeQueries(qc, [0, 500]);
+  }, [blockNumber, qc, quiet]);
 
   return null;
 }
 
 function HeartbeatRefresher() {
+  const { quiet } = useQuiet();
   const qc = useQueryClient();
   React.useEffect(() => {
+    if (quiet) return;
     let stopped = false;
-    const tick = () => {
-      if (stopped) return;
-      nudgeQueries(qc, [0]);
-    };
-    tick();
-    const iv = window.setInterval(tick, 500);
+    const iv = window.setInterval(() => {
+      if (!stopped) nudgeQueries(qc, [0]);
+    }, 2000);
     return () => {
       stopped = true;
       window.clearInterval(iv);
     };
-  }, [qc]);
+  }, [qc, quiet]);
   return null;
 }
 
@@ -3783,6 +3798,7 @@ function AppInner() {
       <Mascots />
 
       <main className="max-w-3xl mx-auto px-3 pb-14">
+        <MaskStorageSync />
         <GameSnapshotProvider>
           <PrefetchRequired />
           <section className="relative z-20 mt-4 flex flex-col gap-6 items-stretch">
