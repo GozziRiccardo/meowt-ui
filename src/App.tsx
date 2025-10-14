@@ -2242,10 +2242,12 @@ function PostBox() {
   const snap = useSnap();
   if (!isConnected) return null;
 
+  const msgId: bigint = (snap as any)?.id ?? 0n;
   const hasActive = Boolean((snap as any)?.show) && (((snap as any)?.rem ?? 0n) > 0n);
-  const glorySec = Number((snap as any)?.gloryRem ?? 0);
+  // When there’s no active id, treat as fully unlocked/idle.
+  const glorySec = msgId && msgId !== 0n ? Number((snap as any)?.gloryRem ?? 0) : 0;
   const lockKind = String((snap as any)?.lockKind ?? "none");
-  const anyLock = lockKind !== "none";
+  const anyLock = msgId && msgId !== 0n ? lockKind !== "none" : false;
 
   // If there's NO active message and NO locks and NOT crowning, show post box immediately,
   // regardless of transient loading flags.
