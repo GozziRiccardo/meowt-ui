@@ -1891,25 +1891,23 @@ function useGameSnapshot() {
   const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
   const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
 
-  const gloryRemLive = Number(gloryRemChainBN ?? 0n);
-  // Glory hint: either chain says we're in glory OR predicted window covers "now"
-  const gloryActiveHint =
-    gloryRemLive > 0 ||
-    (exposureEndRef.current > 0 &&
-     nowSec >= exposureEndRef.current &&
-     gloryEndRef.current > nowSec);
-
-  const gloryLeftUi = gloryRemLive > 0
-    ? gloryRemLive
-    : (gloryEndRef.current > nowSec ? gloryEndRef.current - nowSec : 0);
-
-  // Only consider glory after we *know* exposureEnd for this id and have passed it.
+  // Only consider glory for the *current* message once exposure end is anchored and passed.
+  // This makes “entering glory” equivalent to the exposure countdown reaching zero.
   const inGlory =
     exposureLeft === 0 &&
     gloryEnd > nowSec &&
     exposureAnchored &&
     !gloryGuardActive;
-  const gloryLeft = inGlory ? gloryEnd - nowSec : 0;
+
+  // Anchored glory time left for the UI (no fallback to global gloryRemaining).
+  const gloryLeftUi =
+    gloryEndRef.current > nowSec ? gloryEndRef.current - nowSec : 0;
+
+  // Hint used for visibility decisions, kept strictly anchored as well.
+  const gloryActiveHint =
+    exposureEndRef.current > 0 &&
+    nowSec >= exposureEndRef.current &&
+    gloryEndRef.current > nowSec;
 
   // Prefer immunity while exposure is ongoing; then glory; then boost.
   let lockKind: "boost" | "glory" | "immunity" | "none" = "none";
@@ -1919,15 +1917,13 @@ function useGameSnapshot() {
     lockKind = "immunity";
     const guardLeft = Math.max(0, gloryGuardUntil - nowSec);
     lockLeft = Math.max(immLeft, exposureLeft, guardLeft);
-  } else if (gloryActiveHint && gloryLeftUi > 0) {
-    lockKind = "glory";
-    lockLeft = gloryLeftUi;
   } else if (exposureLeft > 0 && immLeft > 0) {
     lockKind = "immunity";
     lockLeft = immLeft;
-  } else if (inGlory && gloryLeft > 0) {
+  } else if (inGlory && gloryLeftUi > 0) {
+    // Enter glory ONLY after exposure for this id is anchored and passed.
     lockKind = "glory";
-    lockLeft = gloryLeft;
+    lockLeft = gloryLeftUi;
   } else if (boostLeft > 0) {
     lockKind = "boost";
     lockLeft = boostLeft;
@@ -2192,7 +2188,7 @@ function useGameSnapshot() {
     show: effectiveShow,
     m,
     rem: BigInt(remSec),
-    gloryRem: inGlory ? gloryLeft : 0,
+    gloryRem: inGlory ? gloryLeftUi : 0,
     feeLike,
     feeDislike,
     boostCost: boostCostRef.current,
