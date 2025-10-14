@@ -1252,6 +1252,23 @@ function useGameSnapshot() {
     },
   });
 
+  // --- Refresh/ID discovery latches (prevents "waiting" flash on reload) ---
+  const [idKnown, setIdKnown] = React.useState(false);
+  const [refreshGate, setRefreshGate] = React.useState<boolean>(() => {
+    try {
+      const navs = (performance as any)?.getEntriesByType?.("navigation");
+      if (navs && navs[0] && typeof navs[0].type === "string") return navs[0].type === "reload";
+      const legacy = (performance as any)?.navigation?.type;
+      return legacy === 1; // 1 === TYPE_RELOAD (legacy)
+    } catch { return false; }
+  });
+  React.useEffect(() => {
+    if (!idKnown && (typeof id === "bigint" || !!idError)) {
+      setIdKnown(true);
+      setRefreshGate(false);
+    }
+  }, [id, idError, idKnown]);
+
   // Reset zero-id grace when we get a non-zero ID
   React.useEffect(() => {
     if (!zeroIdGraceUntilRef.current) {
@@ -1913,7 +1930,9 @@ function useGameSnapshot() {
       const e = startTime + winPostImm;
       if (e > 0) {
         immEndRef.current = Math.max(immEndRef.current, e);
-        if (lastIdRef.current === idBig && exposureEndRef.current > 0) {
+        // Apply the same guard on post *and* on replacement (same ID, new startTime):
+        // treat the early window as immunity and suppress glory anchoring.
+        if (lastIdRef.current === idBig) {
           if (e > gloryGuardUntilRef.current) {
             gloryGuardUntilRef.current = e;
           }
@@ -2257,9 +2276,12 @@ function useGameSnapshot() {
   const stillFetchingActive = hasId && (!rawReady || (rawFetching && !rawReady));
 
   // If we have NO active message, never report loading → prevents “stuck waiting”
-  const loadingState = hasId
-    ? Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive || !rehydrationComplete)
-    : false;
+  // On a hard refresh, hold the UI in "Loading…" until we *know* whether an ID exists.
+  const loadingState = (!idKnown || refreshGate)
+    ? true
+    : (hasId
+        ? Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive || !rehydrationComplete)
+        : false);
 
   return {
     id: idBig,
