@@ -1556,59 +1556,70 @@ function useGameSnapshot() {
   const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
 
   // Explicit rehydration gate (prevents UI flashing before persisted state loads)
-  const [rehydrationComplete, setRehydrationComplete] = React.useState(false);
+  const [rehydrationComplete, setRehydrationComplete] = React.useState(true);
   const rehydrationStartedRef = React.useRef(false);
+  const lastRehydratedIdRef = React.useRef<bigint>(0n);
 
   React.useEffect(() => {
+    const currentId = hasId ? idBig : 0n;
+
     if (rehydrationStartedRef.current) return;
+    if (lastRehydratedIdRef.current === currentId && rehydrationComplete) return;
+
+    if (!hasId || !currentId) {
+      lastRehydratedIdRef.current = currentId;
+      if (!rehydrationComplete) setRehydrationComplete(true);
+      return;
+    }
+
     rehydrationStartedRef.current = true;
+    setRehydrationComplete(false);
 
     let cancelled = false;
     (async () => {
       try {
         const nowS = Math.floor(Date.now() / 1000);
 
-        if (hasId && idBig && idBig !== 0n) {
-          const persisted = readWindowTimes(idBig);
-          if (persisted) {
-            if (persisted.exposureEnd)
-              exposureEndRef.current = Math.max(exposureEndRef.current, persisted.exposureEnd);
-            if (persisted.gloryEnd)
-              gloryEndRef.current = Math.max(gloryEndRef.current, persisted.gloryEnd);
-            if (persisted.immEnd)
-              immEndRef.current = Math.max(immEndRef.current, persisted.immEnd);
-          }
+        const persisted = readWindowTimes(currentId);
+        if (persisted) {
+          if (persisted.exposureEnd)
+            exposureEndRef.current = Math.max(exposureEndRef.current, persisted.exposureEnd);
+          if (persisted.gloryEnd)
+            gloryEndRef.current = Math.max(gloryEndRef.current, persisted.gloryEnd);
+          if (persisted.immEnd)
+            immEndRef.current = Math.max(immEndRef.current, persisted.immEnd);
         }
 
-        if (hasId && idBig && idBig !== 0n) {
-          const persistedBoost = readBoostEndLS(idBig);
-          if (persistedBoost > nowS) {
-            boostEndRef.current = Math.max(boostEndRef.current, persistedBoost);
-          }
+        const persistedBoost = readBoostEndLS(currentId);
+        if (persistedBoost > nowS) {
+          boostEndRef.current = Math.max(boostEndRef.current, persistedBoost);
         }
 
         const persistedImm = readMaskState(IMMUNITY_KEY);
         const immId = parseMaskMessageId(persistedImm?.messageId);
-        const immUntil = Number(persistedImm?.until ?? 0);
-        if (immId === idBig && Number.isFinite(immUntil) && immUntil > nowS) {
-          immEndRef.current = Math.max(immEndRef.current, immUntil);
+        if (immId === currentId && Number.isFinite(persistedImm?.until) && persistedImm!.until > nowS) {
+          immEndRef.current = Math.max(immEndRef.current, persistedImm!.until);
         }
 
         if (!cancelled) {
+          lastRehydratedIdRef.current = currentId;
           setRehydrationComplete(true);
         }
       } catch (err) {
         console.error("Rehydration failed:", err);
         if (!cancelled) {
+          lastRehydratedIdRef.current = currentId;
           setRehydrationComplete(true);
         }
+      } finally {
+        rehydrationStartedRef.current = false;
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [hasId, idBig]);
+  }, [hasId, idBig, rehydrationComplete]);
 
   // Fast prime of window ends via chain reads (refresh resilience)
   React.useEffect(() => {
