@@ -1176,7 +1176,12 @@ function useGameSnapshot() {
   const OPTIMISTIC_SHOW_MS = 1100;
   const ID_PENDING_MAX_HOLD_MS = 1800;
   const SHOW_CUSHION = 1;
+  const GLORY_ON_POST_GUARD_MS = 1200;
   const { quiet } = useQuiet();
+
+  // --- Rehydration gate to avoid early/flickery UI ---
+  const [rehydrationComplete, setRehydrationComplete] = React.useState(false);
+  const rehydrationStartedRef = React.useRef(false);
 
   // Detect BroadcastChannel support (gate leader mode)
   const bcSupported =
@@ -1555,6 +1560,42 @@ function useGameSnapshot() {
   const lastContentKeyRef = React.useRef<string>("");
   const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
 
+  // One-time rehydrate persisted timers before we show any lock/UI state
+  React.useEffect(() => {
+    if (rehydrationStartedRef.current) return;
+    rehydrationStartedRef.current = true;
+    try {
+      const nowS = Math.floor(Date.now() / 1000);
+      if (hasId && idBig) {
+        const persisted = readWindowTimes(idBig);
+        if (persisted) {
+          if (persisted.exposureEnd)
+            exposureEndRef.current = Math.max(exposureEndRef.current, persisted.exposureEnd);
+          if (persisted.gloryEnd)
+            gloryEndRef.current = Math.max(gloryEndRef.current, persisted.gloryEnd);
+          if (persisted.immEnd)
+            immEndRef.current = Math.max(immEndRef.current, persisted.immEnd);
+        }
+        const boostEndSaved = readBoostEndLS(idBig);
+        if (boostEndSaved > nowS) {
+          boostEndRef.current = Math.max(boostEndRef.current, boostEndSaved);
+        }
+      }
+      const immPersist = readMaskState(IMMUNITY_KEY);
+      const immPid = parseMaskMessageId(immPersist?.messageId);
+      if (
+        immPid === idBig &&
+        Number.isFinite(immPersist?.until) &&
+        (immPersist!.until as number) > nowS
+      ) {
+        immEndRef.current = Math.max(immEndRef.current, immPersist!.until as number);
+      }
+    } catch {
+      /* fail-open */
+    }
+    setRehydrationComplete(true);
+  }, [hasId, idBig]);
+
   // Fast prime of window ends via chain reads (refresh resilience)
   React.useEffect(() => {
     if (!hasId || !publicClient || !idBig) return;
@@ -1650,6 +1691,13 @@ function useGameSnapshot() {
       }
 
       idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS; // (hold stays in ms)
+
+      // Guard glory UI immediately after post/id change so we don't flash post box.
+      const guardForSec = Math.ceil(GLORY_ON_POST_GUARD_MS / 1000);
+      if (guardForSec > 0) {
+        const guardUntil = computeChainNow() + guardForSec;
+        gloryGuardUntilRef.current = Math.max(gloryGuardUntilRef.current, guardUntil);
+      }
 
       // Hydrate boost end from LS to avoid "reset to max duration" after refresh.
       const persisted = readBoostEndLS(idBig);
@@ -1886,39 +1934,44 @@ function useGameSnapshot() {
   const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
   const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
 
-  // Only consider glory for the *current* message once exposure end is anchored and passed.
-  // This makes “entering glory” equivalent to the exposure countdown reaching zero.
+  const gloryRemLive = Number(gloryRemChainBN ?? 0n);
+  // Glory hint: either chain says we're in glory OR predicted window covers "now"
+  const gloryActiveHint =
+    gloryRemLive > 0 ||
+    (exposureEndRef.current > 0 &&
+      nowSec >= exposureEndRef.current &&
+      gloryEndRef.current > nowSec);
+
+  const gloryLeftUi =
+    gloryRemLive > 0
+      ? gloryRemLive
+      : gloryEndRef.current > nowSec
+      ? gloryEndRef.current - nowSec
+      : 0;
+  // Only consider glory after we *know* exposureEnd for this id and have passed it.
   const inGlory =
     exposureLeft === 0 &&
     gloryEnd > nowSec &&
     exposureAnchored &&
     !gloryGuardActive;
-
-  // Anchored glory time left for the UI (no fallback to global gloryRemaining).
-  const gloryLeftUi =
-    gloryEndRef.current > nowSec ? gloryEndRef.current - nowSec : 0;
-
-  // Hint used for visibility decisions, kept strictly anchored as well.
-  const gloryActiveHint =
-    exposureEndRef.current > 0 &&
-    nowSec >= exposureEndRef.current &&
-    gloryEndRef.current > nowSec;
+  const gloryLeft = inGlory ? gloryEnd - nowSec : 0;
 
   // Prefer immunity while exposure is ongoing; then glory; then boost.
   let lockKind: "boost" | "glory" | "immunity" | "none" = "none";
   let lockLeft = 0;
   if (gloryGuardActive) {
-    // During guard, treat as immunity to avoid UI “jump to glory” and to hide the postbox.
     lockKind = "immunity";
     const guardLeft = Math.max(0, gloryGuardUntil - nowSec);
     lockLeft = Math.max(immLeft, exposureLeft, guardLeft);
+  } else if (gloryActiveHint && gloryLeftUi > 0) {
+    lockKind = "glory";
+    lockLeft = gloryLeftUi;
   } else if (exposureLeft > 0 && immLeft > 0) {
     lockKind = "immunity";
     lockLeft = immLeft;
-  } else if (inGlory && gloryLeftUi > 0) {
-    // Enter glory ONLY after exposure for this id is anchored and passed.
+  } else if (inGlory && gloryLeft > 0) {
     lockKind = "glory";
-    lockLeft = gloryLeftUi;
+    lockLeft = gloryLeft;
   } else if (boostLeft > 0) {
     lockKind = "boost";
     lockLeft = boostLeft;
@@ -2199,6 +2252,7 @@ function useGameSnapshot() {
     gloryPredictedEnd: Math.max(0, gloryEndRef.current),
     nowSec,
     immLeft,
+    rehydrationComplete,
   } as const;
 }
 const GameSnapshotContext = React.createContext<ReturnType<typeof useGameSnapshot> | null>(null);
@@ -2227,10 +2281,10 @@ function useLiveChainId() {
 function PostBox() {
   const isConnected = useUiConnected();
   const snap = useSnap();
-  if (!isConnected) return null;
-
-  // Don’t render the post box while snapshot is still loading to avoid the idle flash.
+  // Gate until snapshot is rehydrated and not in loading
+  if (!((snap as any)?.rehydrationComplete ?? false)) return null;
   if ((snap as any)?.loading) return null;
+  if (!isConnected) return null;
 
   // If no message is being shown at all, we are idle by definition → show Post UI.
   // This bypasses any stale latch/guard that might linger when the card itself is hidden.
@@ -3514,21 +3568,21 @@ function ActiveCard() {
   return (
     <div className="flex flex-col gap-3 items-stretch">
       {/* overlays */}
-      {showModMask && (
+      {showModMask && (snap as any)?.rehydrationComplete && (
         <FinalizingMask
           secondsLeft={modMaskLeft}
           imgUrl="/overlays/moderated.png"
           message="The message has been canceled for violation of our policies"
         />
       )}
-      {!showModMask && showNukeMask && (
+      {!showModMask && showNukeMask && (snap as any)?.rehydrationComplete && (
         <FinalizingMask
           secondsLeft={nukeMaskLeft}
           imgUrl="/overlays/nuked.png"
           message="Too many dislikes! The message has been nuked"
         />
       )}
-      {!showModMask && !showNukeMask && showGloryMask && (
+      {!showModMask && !showNukeMask && showGloryMask && (snap as any)?.rehydrationComplete && (
         <FinalizingMask secondsLeft={gloryMaskLeft} imgUrl="/overlays/finalizing.png" />
       )}
 
