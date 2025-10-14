@@ -2967,12 +2967,14 @@ function ActiveCard() {
   // Prevent mask from appearing too early on refresh: require we be in the latch pad
   // (last few seconds of glory) or already in the freeze window.
   const allowGloryMaskEarly = glorySec > 0 && glorySec <= GLORY_MASK_LATCH_PAD;
+  const allowGloryMaskAfter =
+    glorySec <= 0 && (predictedGloryEnd <= 0 || now >= predictedGloryEnd);
   const showGloryMask =
     rehydrated &&
     maskEnd > 0 &&
     now >= latchPadStart &&
     now < maskEnd &&
-    (glorySec <= 0 || allowGloryMaskEarly);
+    (allowGloryMaskAfter || allowGloryMaskEarly);
   const rawLeft = maskEnd > 0 ? maskEnd - now : 0;
   const gloryMaskLeft = showGloryMask
     ? Math.max(0, Math.min(rawLeft, MASK_SECS + GLORY_MASK_LATCH_PAD))
