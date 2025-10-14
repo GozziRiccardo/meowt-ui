@@ -1931,20 +1931,22 @@ function useGameSnapshot() {
   // Boost & cooldown latches
   React.useEffect(() => {
     const boostedRem = Number(boostedRemBN ?? 0n);
-    if (boostedRem > 0) {
-      const end = nowSec + boostedRem;
-      if (end > boostEndRef.current) {
-        boostEndRef.current = end;
-        if (idBig && idBig !== 0n) writeBoostEndLS(idBig, end);
-      }
+    if (!Number.isFinite(boostedRem) || boostedRem <= 0) return;
+    const end = computeChainNow() + boostedRem;
+    if (end > boostEndRef.current) {
+      boostEndRef.current = end;
+      if (idBig && idBig !== 0n) writeBoostEndLS(idBig, end);
     }
-  }, [boostedRemBN, nowSec, idBig]);
-  
+  }, [boostedRemBN, computeChainNow, idBig]);
+
   React.useEffect(() => {
     const cooldownRem = Number(boostCooldownBN ?? 0n);
-    if (cooldownRem > 0)
-      cooldownEndRef.current = Math.max(cooldownEndRef.current, nowSec + cooldownRem);
-  }, [boostCooldownBN, nowSec]);
+    if (!Number.isFinite(cooldownRem) || cooldownRem <= 0) return;
+    const end = computeChainNow() + cooldownRem;
+    if (end > cooldownEndRef.current) {
+      cooldownEndRef.current = end;
+    }
+  }, [boostCooldownBN, computeChainNow]);
 
   // Immunity window
   React.useEffect(() => {
