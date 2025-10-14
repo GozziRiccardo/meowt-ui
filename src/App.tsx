@@ -1176,6 +1176,7 @@ function useGameSnapshot() {
   const OPTIMISTIC_SHOW_MS = 1100;
   const ID_PENDING_MAX_HOLD_MS = 1800;
   const SHOW_CUSHION = 1;
+  const PRE_GLORY_GUARD_SECS = 3;
   const { quiet } = useQuiet();
 
   // Detect BroadcastChannel support (gate leader mode)
@@ -1443,6 +1444,7 @@ function useGameSnapshot() {
     const idMatches = lastIdRef.current === idBig;
     // Exposure is "anchored" once we know exposureEnd for this id
     const exposureAnchoredNow = idMatches && exposureEndRef.current > 0;
+    const gloryPreOkNow = idMatches && gloryPreOkRef.current;
     const chainNowS = computeChainNow();
     const exposureLeftNow = exposureAnchoredNow
       ? Math.max(0, exposureEndRef.current - chainNowS)
@@ -1451,6 +1453,7 @@ function useGameSnapshot() {
     // NEW: do not anchor from gloryRemaining until we *know* exposureEnd for this id,
     // and only after exposure has actually reached 0.
     if (!exposureAnchoredNow) return true;
+    if (!gloryPreOkNow) return true;
     return guardActiveNow || exposureLeftNow > 0;
   }
 
@@ -1571,6 +1574,7 @@ function useGameSnapshot() {
   const lastStartRef = React.useRef<number>(0);
   const lastContentKeyRef = React.useRef<string>("");
   const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
+  const gloryPreOkRef = React.useRef<boolean>(false);
 
   // Explicit rehydration gate (prevents UI flashing before persisted state loads)
   const [rehydrationComplete, setRehydrationComplete] = React.useState(true);
@@ -1724,6 +1728,7 @@ function useGameSnapshot() {
       immEndRef.current = 0;
       lastStartRef.current = 0;
       lastContentKeyRef.current = "";
+      gloryPreOkRef.current = false;
 
       if (!booting) {
         showUntilRef.current = Math.max(
@@ -1768,6 +1773,7 @@ function useGameSnapshot() {
     lastStartRef.current = 0;
     lastContentKeyRef.current = "";
     gloryGuardUntilRef.current = 0;
+    gloryPreOkRef.current = false;
   }, [hasId]);
 
   React.useEffect(() => {
@@ -1794,6 +1800,7 @@ function useGameSnapshot() {
     const predictedImmEnd = startTime && winPostImm ? startTime + winPostImm : 0;
 
     // Reset dynamic windows and seed fresh ends so all devices agree instantly.
+    gloryPreOkRef.current = false;
     exposureEndRef.current = predictedExposureEnd || 0;
     gloryEndRef.current = predictedGloryEnd || 0;
     boostEndRef.current = 0;
@@ -1998,6 +2005,7 @@ function useGameSnapshot() {
   const cooldownEnd = idMatchesRefs ? cooldownEndRef.current : 0;
   const immEnd = idMatchesRefs ? immEndRef.current : 0;
   const gloryGuardUntil = idMatchesRefs ? gloryGuardUntilRef.current : 0; // seconds
+  const gloryPreOk = idMatchesRefs ? gloryPreOkRef.current : false;
 
   const exposureLeft = Math.max(0, exposureEnd - nowSec);
   const immLeft = Math.max(0, immEnd - nowSec);
@@ -2006,13 +2014,32 @@ function useGameSnapshot() {
   const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
   const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
 
+  React.useEffect(() => {
+    if (!hasId || !idMatchesRefs) return;
+    if (!exposureAnchored) return;
+    if (gloryPreOkRef.current) return;
+    if (exposureEnd <= 0) return;
+    if (Math.max(0, exposureEnd - nowSec) <= PRE_GLORY_GUARD_SECS) {
+      gloryPreOkRef.current = true;
+    }
+  }, [hasId, idMatchesRefs, exposureAnchored, exposureEnd, nowSec, PRE_GLORY_GUARD_SECS]);
+
   // Only consider glory for the *current* message once exposure end is anchored and passed.
   // This makes “entering glory” equivalent to the exposure countdown reaching zero.
   const inGlory =
     exposureLeft === 0 &&
     gloryEnd > nowSec &&
     exposureAnchored &&
-    !gloryGuardActive;
+    !gloryGuardActive &&
+    gloryPreOk;
+
+  React.useEffect(() => {
+    if (!hasId || !idMatchesRefs) return;
+    if (!gloryPreOkRef.current) return;
+    if (gloryEnd <= 0 || nowSec >= gloryEnd) {
+      gloryPreOkRef.current = false;
+    }
+  }, [hasId, idMatchesRefs, gloryEnd, nowSec]);
 
   // Anchored glory time left for the UI (no fallback to global gloryRemaining).
   const gloryLeftUi =
