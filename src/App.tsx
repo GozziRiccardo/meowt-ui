@@ -1933,6 +1933,13 @@ function useGameSnapshot() {
     lockLeft = boostLeft;
   }
 
+  // If there’s no active message id, never report any lock state.
+  // This prevents the PostBox from being hidden during idle/no-id.
+  if (!hasId) {
+    lockKind = "none";
+    lockLeft = 0;
+  }
+
   const remFallback = Math.max(0, Number(remChainBN ?? 0n));
   const remSec = endTsNum > 0 || exposureEnd > 0 ? exposureLeft : remFallback;
 
