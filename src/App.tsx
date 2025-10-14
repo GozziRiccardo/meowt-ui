@@ -2242,12 +2242,19 @@ function PostBox() {
   const snap = useSnap();
   if (!isConnected) return null;
 
+  // If no message is being shown at all, we are idle by definition → show Post UI.
+  // This bypasses any stale latch/guard that might linger when the card itself is hidden.
+  const showing = Boolean((snap as any)?.show);
+  if (!showing) {
+    return <PostBoxInner />;
+  }
+
   const msgId: bigint = (snap as any)?.id ?? 0n;
-  const hasActive = Boolean((snap as any)?.show) && (((snap as any)?.rem ?? 0n) > 0n);
-  // When there’s no active id, treat as fully unlocked/idle.
+  const hasActive = (((snap as any)?.rem ?? 0n) > 0n);
+  // When there’s no active id, treat as fully unlocked/idle to avoid stale latches.
   const glorySec = msgId && msgId !== 0n ? Number((snap as any)?.gloryRem ?? 0) : 0;
   const lockKind = String((snap as any)?.lockKind ?? "none");
-  const anyLock = msgId && msgId !== 0n ? lockKind !== "none" : false;
+  const anyLock = msgId && msgId !== 0n ? (lockKind !== "none") : false;
 
   // If there's NO active message and NO locks and NOT crowning, show post box immediately,
   // regardless of transient loading flags.
