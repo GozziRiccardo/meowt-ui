@@ -2014,6 +2014,21 @@ function useGameSnapshot() {
   const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
   const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
 
+  // Disarm pre-glory latch whenever we are idle (no active message).
+  React.useEffect(() => {
+    const remNow = Number(remChainBN ?? 0n);
+    const gRemNow = Number(gloryRemChainBN ?? 0n);
+    const chainIdle = remNow <= 0 && gRemNow <= 0;
+    // Also consider our anchored windows: both exposure & glory ended.
+    const windowsOver =
+      (exposureEndRef.current > 0 ? nowSec >= exposureEndRef.current : true) &&
+      (gloryEndRef.current > 0 ? nowSec >= gloryEndRef.current : true);
+    const noActive = !hasId || (chainIdle && windowsOver);
+    if (noActive && gloryPreOkRef.current) {
+      gloryPreOkRef.current = false;
+    }
+  }, [hasId, remChainBN, gloryRemChainBN, nowSec]);
+
   React.useEffect(() => {
     if (!hasId || !idMatchesRefs) return;
     if (!exposureAnchored) return;
