@@ -2257,11 +2257,9 @@ function useGameSnapshot() {
   const stillFetchingActive = hasId && (!rawReady || (rawFetching && !rawReady));
 
   // If we have NO active message, never report loading → prevents “stuck waiting”
-  const loadingState =
-    waitingForId ||
-    (hasId
-      ? Boolean(bootHold || idChangeHold || stillFetchingActive || !rehydrationComplete)
-      : false);
+  const loadingState = hasId
+    ? Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive || !rehydrationComplete)
+    : false;
 
   return {
     id: idBig,
@@ -2314,7 +2312,6 @@ function PostBox() {
   const isConnected = useUiConnected();
   const snap = useSnap();
   if (!snap.rehydrationComplete) return null;
-  if (!isConnected) return null;
 
   // Don’t render the post box while snapshot is still loading to avoid the idle flash.
   if (snap.loading) return null;
@@ -2323,7 +2320,7 @@ function PostBox() {
   // This bypasses any stale latch/guard that might linger when the card itself is hidden.
   const showing = Boolean(snap.show);
   if (!showing) {
-    return <PostBoxInner />;
+    return isConnected ? <PostBoxInner /> : null;
   }
 
   const msgId = snap.id;
@@ -2336,7 +2333,7 @@ function PostBox() {
   // If there's NO active message and NO locks and NOT crowning, show post box immediately,
   // regardless of transient loading flags.
   if (!hasActive && glorySec <= 0 && !anyLock) {
-    return <PostBoxInner />;
+    return isConnected ? <PostBoxInner /> : null;
   }
   return null;
 }
