@@ -2257,9 +2257,11 @@ function useGameSnapshot() {
   const stillFetchingActive = hasId && (!rawReady || (rawFetching && !rawReady));
 
   // If we have NO active message, never report loading → prevents “stuck waiting”
-  const loadingState = hasId
-    ? Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive || !rehydrationComplete)
-    : false;
+  const loadingState =
+    waitingForId ||
+    (hasId
+      ? Boolean(bootHold || idChangeHold || stillFetchingActive || !rehydrationComplete)
+      : false);
 
   return {
     id: idBig,
@@ -2913,7 +2915,14 @@ function ActiveCard() {
     : 0;
   const latchPadStart =
     maskEnd > 0 ? Math.max(0, maskEnd - (MASK_SECS + GLORY_MASK_LATCH_PAD)) : 0;
-  const showGloryMask = maskEnd > 0 && now >= latchPadStart && now < maskEnd;
+  // Prevent mask from appearing too early on refresh: require we be in the latch pad
+  // (last few seconds of glory) or already in the freeze window.
+  const allowGloryMaskEarly = glorySec > 0 && glorySec <= GLORY_MASK_LATCH_PAD;
+  const showGloryMask =
+    maskEnd > 0 &&
+    now >= latchPadStart &&
+    now < maskEnd &&
+    (glorySec <= 0 || allowGloryMaskEarly);
   const rawLeft = maskEnd > 0 ? maskEnd - now : 0;
   const gloryMaskLeft = showGloryMask
     ? Math.max(0, Math.min(rawLeft, MASK_SECS + GLORY_MASK_LATCH_PAD))
