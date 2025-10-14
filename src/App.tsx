@@ -1176,7 +1176,6 @@ function useGameSnapshot() {
   const OPTIMISTIC_SHOW_MS = 1100;
   const ID_PENDING_MAX_HOLD_MS = 1800;
   const SHOW_CUSHION = 1;
-  const GLORY_ON_POST_GUARD_MS = 1200;
   const { quiet } = useQuiet();
 
   // Detect BroadcastChannel support (gate leader mode)
@@ -1432,7 +1431,10 @@ function useGameSnapshot() {
       ? Math.max(0, exposureEndRef.current - chainNowS)
       : 0;
     const guardActiveNow = chainNowS < gloryGuardUntilRef.current; // seconds vs seconds
-    return guardActiveNow || (exposureAnchoredNow && exposureLeftNow > 0);
+    // NEW: do not anchor from gloryRemaining until we *know* exposureEnd for this id,
+    // and only after exposure has actually reached 0.
+    if (!exposureAnchoredNow) return true;
+    return guardActiveNow || exposureLeftNow > 0;
   }
 
   // We need qc/publicClient and nowSec earlier for sync hooks below
@@ -1639,13 +1641,6 @@ function useGameSnapshot() {
       immEndRef.current = 0;
       lastStartRef.current = 0;
       lastContentKeyRef.current = "";
-
-      // Short post guard in chain seconds
-      const guardSec = Math.ceil(GLORY_ON_POST_GUARD_MS / 1000);
-      gloryGuardUntilRef.current = Math.max(
-        gloryGuardUntilRef.current,
-        computeChainNow() + guardSec
-      );
 
       if (!booting) {
         showUntilRef.current = Math.max(
@@ -2233,6 +2228,9 @@ function PostBox() {
   const isConnected = useUiConnected();
   const snap = useSnap();
   if (!isConnected) return null;
+
+  // Don’t render the post box while snapshot is still loading to avoid the idle flash.
+  if ((snap as any)?.loading) return null;
 
   // If no message is being shown at all, we are idle by definition → show Post UI.
   // This bypasses any stale latch/guard that might linger when the card itself is hidden.
