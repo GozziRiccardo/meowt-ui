@@ -1808,8 +1808,13 @@ function useGameSnapshot() {
       immEndRef.current = 0;
     }
 
-    // Clear previous anchors and tick now; leaders/followers will re-anchor consistently.
+    // Clear previous anchors and force immediate re-anchor from exposure end
     chainNowRef.current = { epoch: 0, fetchedAt: 0 };
+    // Set a temporary anchor to startTime so nowSec matches chain time during immunity window
+    if (startTime && startTime > 0) {
+      const tempAnchorEpoch = startTime - 1; // just under new exposure start
+      chainNowRef.current = { epoch: tempAnchorEpoch, fetchedAt: Date.now() };
+    }
     setNowSec(nowEpoch);
     broadcastNudge();
     nudgeQueries(qc, [0, 150, 400]);
@@ -2021,11 +2026,20 @@ function useGameSnapshot() {
     chainNowRef.current.epoch > 0 && chainNowRef.current.fetchedAt > 0;
   const readyToShowLocks = rehydrationComplete && (hasValidAnchor || !hasId);
 
-  // Prefer immunity while exposure is ongoing; then glory; then boost.
+  // Prefer glory while active; otherwise boost can override immunity/guard.
   let lockKind: "boost" | "glory" | "immunity" | "none" = "none";
   let lockLeft = 0;
   if (readyToShowLocks) {
-    if (gloryGuardActive) {
+    // Glory takes precedence whenever the current message is in glory.
+    if (inGlory && gloryLeftUi > 0) {
+      // Enter glory ONLY after exposure for this id is anchored and passed.
+      lockKind = "glory";
+      lockLeft = gloryLeftUi;
+    } else if (boostLeft > 0) {
+      // Boost takes priority when recently fired, unless glory is active.
+      lockKind = "boost";
+      lockLeft = boostLeft;
+    } else if (gloryGuardActive) {
       // During guard, treat as immunity to avoid UI “jump to glory” and to hide the postbox.
       lockKind = "immunity";
       const guardLeft = Math.max(0, gloryGuardUntil - nowSec);
@@ -2033,13 +2047,6 @@ function useGameSnapshot() {
     } else if (exposureLeft > 0 && immLeft > 0) {
       lockKind = "immunity";
       lockLeft = immLeft;
-    } else if (inGlory && gloryLeftUi > 0) {
-      // Enter glory ONLY after exposure for this id is anchored and passed.
-      lockKind = "glory";
-      lockLeft = gloryLeftUi;
-    } else if (boostLeft > 0) {
-      lockKind = "boost";
-      lockLeft = boostLeft;
     }
   }
 
@@ -2865,6 +2872,7 @@ function ActiveCard() {
 
   const gloryUntilRef = React.useRef(0);
   const gloryMaskMessageIdRef = React.useRef<bigint>(0n);
+  const rehydrationStartedRef = React.useRef(false); // gate during rehydration
 
   // Clamp any persisted "until" so it can't be wildly in the future
   React.useEffect(() => {
@@ -2874,17 +2882,19 @@ function ActiveCard() {
     if (persisted.until > 0 && !persisted.messageId) {
       writeMaskUntil(GLORY_MASK_KEY, 0);
       gloryUntilRef.current = 0;
-    } else if (persisted.until > 0) {
+    } else if (persisted.until > 0 && rehydrated) {
+      // Only restore persisted glory mask after rehydration completes
       const clipped = Math.min(persisted.until, nowSec + GLORY_MAX_SPAN);
       gloryUntilRef.current = clipped > nowSec ? clipped : 0;
     }
-    if (persisted.messageId) {
+    if (rehydrated && persisted.messageId) {
       const storedId = parseMaskMessageId(persisted.messageId);
       if (storedId > 0n) {
         gloryMaskMessageIdRef.current = storedId;
       }
     }
-  }, [GLORY_MAX_SPAN]);
+    rehydrationStartedRef.current = rehydrated;
+  }, [rehydrated, GLORY_MAX_SPAN]);
 
   // Persist once when we ENTER the latch window (last 2s of glory)
   const predictedGloryEnd = Number((snap as any)?.gloryPredictedEnd ?? 0);
@@ -2956,6 +2966,7 @@ function ActiveCard() {
   // (last few seconds of glory) or already in the freeze window.
   const allowGloryMaskEarly = glorySec > 0 && glorySec <= GLORY_MASK_LATCH_PAD;
   const showGloryMask =
+    rehydrated &&
     maskEnd > 0 &&
     now >= latchPadStart &&
     now < maskEnd &&
@@ -3691,7 +3702,7 @@ function ActiveCard() {
             <PreviewSkeleton />
           )}
 
-          {isConnected && (
+          {isConnected && lk !== "glory" && (
             <div className="mt-2 flex flex-col items-center gap-2">
               {((snap as any)?.boostedRem ?? 0) > 0 ? (
                 <>
