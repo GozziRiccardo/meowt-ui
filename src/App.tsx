@@ -1555,6 +1555,61 @@ function useGameSnapshot() {
   const lastContentKeyRef = React.useRef<string>("");
   const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
 
+  // Explicit rehydration gate (prevents UI flashing before persisted state loads)
+  const [rehydrationComplete, setRehydrationComplete] = React.useState(false);
+  const rehydrationStartedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (rehydrationStartedRef.current) return;
+    rehydrationStartedRef.current = true;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const nowS = Math.floor(Date.now() / 1000);
+
+        if (hasId && idBig && idBig !== 0n) {
+          const persisted = readWindowTimes(idBig);
+          if (persisted) {
+            if (persisted.exposureEnd)
+              exposureEndRef.current = Math.max(exposureEndRef.current, persisted.exposureEnd);
+            if (persisted.gloryEnd)
+              gloryEndRef.current = Math.max(gloryEndRef.current, persisted.gloryEnd);
+            if (persisted.immEnd)
+              immEndRef.current = Math.max(immEndRef.current, persisted.immEnd);
+          }
+        }
+
+        if (hasId && idBig && idBig !== 0n) {
+          const persistedBoost = readBoostEndLS(idBig);
+          if (persistedBoost > nowS) {
+            boostEndRef.current = Math.max(boostEndRef.current, persistedBoost);
+          }
+        }
+
+        const persistedImm = readMaskState(IMMUNITY_KEY);
+        const immId = parseMaskMessageId(persistedImm?.messageId);
+        const immUntil = Number(persistedImm?.until ?? 0);
+        if (immId === idBig && Number.isFinite(immUntil) && immUntil > nowS) {
+          immEndRef.current = Math.max(immEndRef.current, immUntil);
+        }
+
+        if (!cancelled) {
+          setRehydrationComplete(true);
+        }
+      } catch (err) {
+        console.error("Rehydration failed:", err);
+        if (!cancelled) {
+          setRehydrationComplete(true);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasId, idBig]);
+
   // Fast prime of window ends via chain reads (refresh resilience)
   React.useEffect(() => {
     if (!hasId || !publicClient || !idBig) return;
@@ -1842,21 +1897,31 @@ function useGameSnapshot() {
 
   // Immunity window
   React.useEffect(() => {
+    if (!hasId || !idBig) return;
     if (startTime && winPostImm) {
       const e = startTime + winPostImm;
-      if (e > 0) immEndRef.current = Math.max(immEndRef.current, e);
-      if (lastIdRef.current === idBig && e > gloryGuardUntilRef.current) {
-        gloryGuardUntilRef.current = e; // seconds
-      }
-      // Persist and broadcast immunity end so refreshes and other tabs show it instantly
-      if (lastIdRef.current === idBig && e > 0) {
-        try {
-          writeMaskUntil(IMMUNITY_KEY, e, { messageId: idBig });
-        } catch {}
-        broadcastImmEnd(e);
+      if (e > 0) {
+        immEndRef.current = Math.max(immEndRef.current, e);
+        if (lastIdRef.current === idBig && exposureEndRef.current > 0) {
+          if (e > gloryGuardUntilRef.current) {
+            gloryGuardUntilRef.current = e;
+          }
+        }
+        if (lastIdRef.current === idBig) {
+          try {
+            writeMaskUntil(IMMUNITY_KEY, e, { messageId: idBig });
+          } catch {}
+          broadcastImmEnd(e);
+        }
       }
     }
-  }, [startTime, winPostImm, idBig]);
+  }, [startTime, winPostImm, idBig, hasId]);
+
+  React.useEffect(() => {
+    if (hasId && lastIdRef.current !== idBig) {
+      gloryGuardUntilRef.current = 0;
+    }
+  }, [hasId, idBig]);
 
   React.useEffect(() => {
     if (hasId && idBig && (exposureEndRef.current > 0 || gloryEndRef.current > 0 || immEndRef.current > 0)) {
@@ -1904,24 +1969,30 @@ function useGameSnapshot() {
     nowSec >= exposureEndRef.current &&
     gloryEndRef.current > nowSec;
 
+  const hasValidAnchor =
+    chainNowRef.current.epoch > 0 && chainNowRef.current.fetchedAt > 0;
+  const readyToShowLocks = rehydrationComplete && (hasValidAnchor || !hasId);
+
   // Prefer immunity while exposure is ongoing; then glory; then boost.
   let lockKind: "boost" | "glory" | "immunity" | "none" = "none";
   let lockLeft = 0;
-  if (gloryGuardActive) {
-    // During guard, treat as immunity to avoid UI “jump to glory” and to hide the postbox.
-    lockKind = "immunity";
-    const guardLeft = Math.max(0, gloryGuardUntil - nowSec);
-    lockLeft = Math.max(immLeft, exposureLeft, guardLeft);
-  } else if (exposureLeft > 0 && immLeft > 0) {
-    lockKind = "immunity";
-    lockLeft = immLeft;
-  } else if (inGlory && gloryLeftUi > 0) {
-    // Enter glory ONLY after exposure for this id is anchored and passed.
-    lockKind = "glory";
-    lockLeft = gloryLeftUi;
-  } else if (boostLeft > 0) {
-    lockKind = "boost";
-    lockLeft = boostLeft;
+  if (readyToShowLocks) {
+    if (gloryGuardActive) {
+      // During guard, treat as immunity to avoid UI “jump to glory” and to hide the postbox.
+      lockKind = "immunity";
+      const guardLeft = Math.max(0, gloryGuardUntil - nowSec);
+      lockLeft = Math.max(immLeft, exposureLeft, guardLeft);
+    } else if (exposureLeft > 0 && immLeft > 0) {
+      lockKind = "immunity";
+      lockLeft = immLeft;
+    } else if (inGlory && gloryLeftUi > 0) {
+      // Enter glory ONLY after exposure for this id is anchored and passed.
+      lockKind = "glory";
+      lockLeft = gloryLeftUi;
+    } else if (boostLeft > 0) {
+      lockKind = "boost";
+      lockLeft = boostLeft;
+    }
   }
 
   // If there’s no active message id, never report any lock state.
@@ -2140,7 +2211,8 @@ function useGameSnapshot() {
     !bootHold &&
     !idChangeHold &&
     !waitingForId &&
-    rawReadyEnough;
+    rawReadyEnough &&
+    readyToShowLocks;
 
   // Clear optimistic show once resolved
   React.useEffect(() => {
@@ -2175,7 +2247,7 @@ function useGameSnapshot() {
 
   // If we have NO active message, never report loading → prevents “stuck waiting”
   const loadingState = hasId
-    ? Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive)
+    ? Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive || !rehydrationComplete)
     : false;
 
   return {
@@ -2199,6 +2271,7 @@ function useGameSnapshot() {
     gloryPredictedEnd: Math.max(0, gloryEndRef.current),
     nowSec,
     immLeft,
+    rehydrationComplete,
   } as const;
 }
 const GameSnapshotContext = React.createContext<ReturnType<typeof useGameSnapshot> | null>(null);
@@ -2227,23 +2300,24 @@ function useLiveChainId() {
 function PostBox() {
   const isConnected = useUiConnected();
   const snap = useSnap();
+  if (!snap.rehydrationComplete) return null;
   if (!isConnected) return null;
 
   // Don’t render the post box while snapshot is still loading to avoid the idle flash.
-  if ((snap as any)?.loading) return null;
+  if (snap.loading) return null;
 
   // If no message is being shown at all, we are idle by definition → show Post UI.
   // This bypasses any stale latch/guard that might linger when the card itself is hidden.
-  const showing = Boolean((snap as any)?.show);
+  const showing = Boolean(snap.show);
   if (!showing) {
     return <PostBoxInner />;
   }
 
-  const msgId: bigint = (snap as any)?.id ?? 0n;
-  const hasActive = (((snap as any)?.rem ?? 0n) > 0n);
+  const msgId = snap.id;
+  const hasActive = snap.rem > 0n;
   // When there’s no active id, treat as fully unlocked/idle to avoid stale latches.
-  const glorySec = msgId && msgId !== 0n ? Number((snap as any)?.gloryRem ?? 0) : 0;
-  const lockKind = String((snap as any)?.lockKind ?? "none");
+  const glorySec = msgId && msgId !== 0n ? Number(snap.gloryRem ?? 0) : 0;
+  const lockKind = snap.lockKind ?? "none";
   const anyLock = msgId && msgId !== 0n ? (lockKind !== "none") : false;
 
   // If there's NO active message and NO locks and NOT crowning, show post box immediately,
@@ -2649,6 +2723,7 @@ function ActiveCard() {
   const [toast, setToast] = React.useState("");
   const { quiet, setQuiet } = useQuiet();
   const hasActive = Boolean((snap as any)?.show);
+  const rehydrated = snap.rehydrationComplete;
 
   const lk = (snap as any)?.lockKind as "boost" | "glory" | "immunity" | "none";
   const timerOverride =
@@ -3509,30 +3584,30 @@ function ActiveCard() {
 
   const previewReady = uri.length > 0;
 
-  const renderActive = hasActive || showingModeratedFreeze;
+  const renderActive = (hasActive || showingModeratedFreeze) && rehydrated;
 
   return (
     <div className="flex flex-col gap-3 items-stretch">
       {/* overlays */}
-      {showModMask && (
+      {showModMask && rehydrated && (
         <FinalizingMask
           secondsLeft={modMaskLeft}
           imgUrl="/overlays/moderated.png"
           message="The message has been canceled for violation of our policies"
         />
       )}
-      {!showModMask && showNukeMask && (
+      {!showModMask && showNukeMask && rehydrated && (
         <FinalizingMask
           secondsLeft={nukeMaskLeft}
           imgUrl="/overlays/nuked.png"
           message="Too many dislikes! The message has been nuked"
         />
       )}
-      {!showModMask && !showNukeMask && showGloryMask && (
+      {!showModMask && !showNukeMask && showGloryMask && rehydrated && (
         <FinalizingMask secondsLeft={gloryMaskLeft} imgUrl="/overlays/finalizing.png" />
       )}
 
-      {(snap as any).loading ? (
+      {snap.loading ? (
         <div className="p-4 border rounded-2xl text-center bg-white/70 dark:bg-white/10 border-black/10 dark:border-white/10 backdrop-blur-sm">
           Loading…
         </div>
