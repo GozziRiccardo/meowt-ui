@@ -1891,8 +1891,6 @@ function useGameSnapshot() {
   const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
   const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
 
-  const gloryRemLive = Number(gloryRemChainBN ?? 0n);
-
   // Only consider glory for the *current* message once exposure end is anchored and passed.
   // This makes “entering glory” equivalent to the exposure countdown reaching zero.
   const inGlory =
@@ -2190,7 +2188,7 @@ function useGameSnapshot() {
     show: effectiveShow,
     m,
     rem: BigInt(remSec),
-    gloryRem: inGlory ? gloryLeft : 0,
+    gloryRem: inGlory ? gloryLeftUi : 0,
     feeLike,
     feeDislike,
     boostCost: boostCostRef.current,
