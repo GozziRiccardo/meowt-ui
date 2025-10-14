@@ -1773,43 +1773,61 @@ function useGameSnapshot() {
   React.useEffect(() => {
     if (!hasId) return;
     if (startTime <= 0) return;
+    // Track content (not used as a guard anymore, but still useful to keep current)
     const rawContentHash = (m?.contentHash ?? m?.[6] ?? "0x") as string;
     const rawUri = (m?.uri ?? m?.[5] ?? "") as string;
     const rawAuthor = (m?.author ?? m?.[1]) as string | undefined;
     const msgContentKey = `${rawContentHash || "0x"}|${rawUri || ""}|${rawAuthor || ""}`;
-    const sameContent = lastContentKeyRef.current === msgContentKey;
     lastContentKeyRef.current = msgContentKey;
-    if (lastStartRef.current === startTime) return;
 
+    if (lastStartRef.current === startTime) return;
     const seenBefore = lastStartRef.current > 0;
     lastStartRef.current = startTime;
-    if (!seenBefore) return;
+    if (!seenBefore) return; // first hydrate, not a replacement transition
 
-    if (!sameContent) return;
-
+    // --- Replacement detected (same id, new start) ---
     const nowEpoch = Math.floor(Date.now() / 1000);
-    const gloryActive = gloryEndRef.current > nowEpoch;
+    const predictedExposureEnd = startTime && B0secs ? startTime + B0secs : 0;
+    const predictedGloryEnd = predictedExposureEnd > 0 && winGlory
+      ? predictedExposureEnd + winGlory
+      : 0;
+    const predictedImmEnd = startTime && winPostImm ? startTime + winPostImm : 0;
 
-    exposureEndRef.current = 0;
-    if (!gloryActive) gloryEndRef.current = 0;
+    // Reset dynamic windows and seed fresh ends so all devices agree instantly.
+    exposureEndRef.current = predictedExposureEnd || 0;
+    gloryEndRef.current = predictedGloryEnd || 0;
     boostEndRef.current = 0;
     cooldownEndRef.current = 0;
-    immEndRef.current = 0;
+    if (predictedImmEnd > 0) {
+      immEndRef.current = Math.max(immEndRef.current, predictedImmEnd);
+      // Latch the post/replace guard so we cannot enter glory during the new immunity.
+      gloryGuardUntilRef.current = Math.max(gloryGuardUntilRef.current, predictedImmEnd);
+      try { writeMaskUntil(IMMUNITY_KEY, predictedImmEnd, { messageId: idBig }); } catch {}
+      broadcastImmEnd(predictedImmEnd);
+    } else {
+      immEndRef.current = 0;
+    }
 
+    // Clear previous anchors and tick now; leaders/followers will re-anchor consistently.
     chainNowRef.current = { epoch: 0, fetchedAt: 0 };
-    setNowSec(Math.floor(Date.now() / 1000));
+    setNowSec(nowEpoch);
     broadcastNudge();
-    nudgeQueries(qc, [0, 200]);
+    nudgeQueries(qc, [0, 150, 400]);
 
+    // Visual hold to avoid any flicker while reads settle
     if (!booting) {
       showUntilRef.current = Math.max(
         showUntilRef.current,
-        Math.floor(Date.now() / 1000) + Math.ceil(OPTIMISTIC_SHOW_MS / 1000),
+        nowEpoch + Math.ceil(OPTIMISTIC_SHOW_MS / 1000),
       );
     }
-
     idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS;
-  }, [hasId, startTime, booting, OPTIMISTIC_SHOW_MS, ID_CHANGE_HOLD_MS, qc]);
+
+    // Persist new window ends so refresh immediately restores the correct state.
+    if (idBig && idBig !== 0n) {
+      writeWindowTimes(idBig, exposureEndRef.current, gloryEndRef.current, immEndRef.current);
+    }
+  }, [hasId, idBig, startTime, B0secs, winGlory, winPostImm, booting, OPTIMISTIC_SHOW_MS, ID_CHANGE_HOLD_MS, qc]);
 
   const idChangeHold = Date.now() < idHoldUntilRef.current;
 
