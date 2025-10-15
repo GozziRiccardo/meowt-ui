@@ -2995,6 +2995,18 @@ function ActiveCard() {
     predictedGloryEnd > 0 ? predictedGloryEnd + MASK_SECS : 0;
   const gloryPersistWroteEndRef = React.useRef<number>(0);
   const gloryPersistWroteIdRef = React.useRef<bigint>(0n);
+  const [gloryMaskLatched, setGloryMaskLatched] = React.useState(false);
+  const clearGloryMaskState = React.useCallback(() => {
+    gloryPreOkRef.current = false;
+    gloryUntilRef.current = 0;
+    gloryMaskMessageIdRef.current = 0n;
+    gloryPersistWroteEndRef.current = 0;
+    gloryPersistWroteIdRef.current = 0n;
+    setGloryMaskLatched(false);
+    try {
+      writeMaskUntil(GLORY_MASK_KEY, 0);
+    } catch {}
+  }, []);
   React.useEffect(() => {
     if (!msgId || msgId === 0n || predictedMaskEnd === 0) {
       gloryPersistWroteEndRef.current = 0;
@@ -3060,13 +3072,26 @@ function ActiveCard() {
   const allowGloryMaskEarly = glorySec > 0 && glorySec <= GLORY_MASK_LATCH_PAD;
   const allowGloryMaskAfter =
     glorySec <= 0 && (predictedGloryEnd <= 0 || now >= predictedGloryEnd);
-  const showGloryMask =
+  const gloryMaskEligible =
     rehydrated &&
     maskEnd > 0 &&
     now >= latchPadStart &&
     now < maskEnd &&
     (allowGloryMaskAfter || allowGloryMaskEarly);
   const rawLeft = maskEnd > 0 ? maskEnd - now : 0;
+  React.useEffect(() => {
+    if (gloryMaskEligible) {
+      setGloryMaskLatched((prev) => (prev ? prev : true));
+      return;
+    }
+    setGloryMaskLatched((prev) => {
+      if (!prev) return prev;
+      if (maskEnd > 0 && now < maskEnd) return prev;
+      if (maskEnd <= 0) return false;
+      return now >= maskEnd ? false : prev;
+    });
+  }, [gloryMaskEligible, maskEnd, now]);
+  const showGloryMask = gloryMaskLatched;
   const gloryMaskLeft = showGloryMask
     ? Math.max(0, Math.min(rawLeft, MASK_SECS + GLORY_MASK_LATCH_PAD))
     : 0;
@@ -3096,10 +3121,18 @@ function ActiveCard() {
       try {
         const m = readMaskState(MOD_MASK_KEY);
         modMaskUntilRef.current = m?.until > 0 ? Math.min(m.until, nowS + MASK_SECS) : 0;
+        if (m?.messageId) {
+          const id = parseMaskMessageId(m.messageId);
+          if (id > 0n) modMaskMessageIdRef.current = id;
+        }
       } catch {}
       try {
         const n = readMaskState(NUKE_MASK_KEY);
         nukeMaskUntilRef.current = n?.until > 0 ? Math.min(n.until, nowS + MASK_SECS) : 0;
+        if (n?.messageId) {
+          const id = parseMaskMessageId(n.messageId);
+          if (id > 0n) nukeMaskMessageIdRef.current = id;
+        }
       } catch {}
     };
     const onVis = () => document.visibilityState === "visible" && rehydrate();
@@ -3248,13 +3281,14 @@ function ActiveCard() {
       modMaskUntilRef.current = 0;
       modMaskMessageIdRef.current = 0n;
       writeMaskUntil(MOD_MASK_KEY, 0);
+      clearGloryMaskState();
     }
     if (nukeMaskUntilRef.current > 0 && now >= nukeMaskUntilRef.current) {
       nukeMaskUntilRef.current = 0;
       nukeMaskMessageIdRef.current = 0n;
       writeMaskUntil(NUKE_MASK_KEY, 0);
     }
-  }, [now, hasActive]);
+  }, [now, hasActive, clearGloryMaskState]);
 
   React.useEffect(() => {
     isActiveRef.current = hasActive;
@@ -3286,7 +3320,16 @@ function ActiveCard() {
     if (latched) {
       setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
     }
-  }, [hasActive, currentMessage, latchedModId, modFlaggedLive, msgId, NUKE_MASK_SECS]);
+    clearGloryMaskState();
+  }, [
+    hasActive,
+    currentMessage,
+    latchedModId,
+    modFlaggedLive,
+    msgId,
+    NUKE_MASK_SECS,
+    clearGloryMaskState,
+  ]);
   React.useEffect(() => {
     if (hasActive) setModFrozenMessage(null);
   }, [hasActive]);
@@ -3356,6 +3399,7 @@ function ActiveCard() {
             message: { ...(currentMessage as any) },
           };
         setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
+        clearGloryMaskState();
       } else {
         const capped = Math.min(untilBase, nowS + MASK_SECS);
         if (capped > nukeMaskUntilRef.current) {
@@ -3369,7 +3413,7 @@ function ActiveCard() {
     return () => {
       cancelled = true;
     };
-  }, [hasActive, currentMessage, msgId, publicClient, NUKE_MASK_SECS]);
+  }, [hasActive, currentMessage, msgId, publicClient, NUKE_MASK_SECS, clearGloryMaskState]);
 
   async function probeResolution(idToCheck: bigint) {
     if (masksSuppressed()) return;
@@ -3435,6 +3479,7 @@ function ActiveCard() {
         if (latched) {
           setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
         }
+        clearGloryMaskState();
         return;
       }
 
@@ -3476,8 +3521,9 @@ function ActiveCard() {
       modMaskMessageIdRef.current = 0n;
       writeMaskUntil(MOD_MASK_KEY, 0);
       setModFrozenMessage(null);
+      clearGloryMaskState();
     }
-  }, [hasActive, latchedModId, modFlaggedLive, msgId]);
+  }, [hasActive, latchedModId, modFlaggedLive, msgId, clearGloryMaskState]);
 
   React.useEffect(() => {
     const wasActive = hadActiveRef.current;
