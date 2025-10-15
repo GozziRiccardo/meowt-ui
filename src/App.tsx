@@ -2129,6 +2129,30 @@ function useGameSnapshot() {
     }
   }, [hasId, idMatchesRefs, gloryEnd, nowSec, showModMask, showNukeMask]);
 
+  // Ensure the guard stays open while we are definitively in glory. This allows refreshes
+  // during glory to re-enter without waiting for the pre-glory window to run again.
+  React.useEffect(() => {
+    if (!hasId || !idMatchesRefs) return;
+    const definitelyInGlory =
+      exposureAnchored &&
+      exposureLeft === 0 &&
+      gloryEnd > nowSec &&
+      !gloryGuardActive &&
+      !immLeft;
+    if (definitelyInGlory && !gloryPreOkRef.current) {
+      gloryPreOkRef.current = true;
+    }
+  }, [
+    hasId,
+    idMatchesRefs,
+    exposureAnchored,
+    exposureLeft,
+    gloryEnd,
+    nowSec,
+    gloryGuardActive,
+    immLeft,
+  ]);
+
   // Only consider glory for the *current* message once exposure end is anchored and passed.
   // This makes “entering glory” equivalent to the exposure countdown reaching zero.
   const inGlory =
