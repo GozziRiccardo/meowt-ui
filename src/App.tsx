@@ -2813,15 +2813,20 @@ const NUKE_MASK_KEY = "meowt:mask:nuke";
 const MOD_MASK_KEY = "meowt:mask:mod";
 const GLORY_MASK_LATCH_PAD = 2; // seconds before glory ends to begin masking
 
+let modMaskLatchedIdsRefGlobal: React.MutableRefObject<Set<bigint>> | null = null;
 let maskSuppressionUntil = 0;
 let suppressedMaskTypes = new Set<string>();
 function suppressMasksFor(seconds: number, types: string[] = []) {
   const next = Math.floor(Date.now() / 1000) + Math.max(0, seconds);
   maskSuppressionUntil = Math.max(maskSuppressionUntil, next);
+  const touchesModMask = types.length === 0 || types.includes(MOD_MASK_KEY);
   if (types.length === 0) {
     suppressedMaskTypes.add("*");
   } else {
     types.forEach((t) => suppressedMaskTypes.add(t));
+  }
+  if (touchesModMask) {
+    modMaskLatchedIdsRefGlobal?.current.clear();
   }
 }
 function extendMaskSuppression(seconds: number) {
@@ -3114,16 +3119,25 @@ function ActiveCard() {
   const nukeMaskMessageIdRef = React.useRef<bigint>(0n);
   const modMaskUntilRef = React.useRef(0);
   const modMaskMessageIdRef = React.useRef<bigint>(0n);
+  const modMaskLatchedIdsRef = React.useRef<Set<bigint>>(new Set());
+  modMaskLatchedIdsRefGlobal = modMaskLatchedIdsRef;
+  React.useEffect(() => {
+    return () => {
+      if (modMaskLatchedIdsRefGlobal === modMaskLatchedIdsRef) {
+        modMaskLatchedIdsRefGlobal = null;
+      }
+    };
+  }, []);
 
-  // Latch the moderation mask once per message id while it's active.
+  // Latch the moderation mask once per message id until it's cleared.
   // - Never extend an already-active mask for the same id.
   // - Clamp to at most MASK_SECS from "now" to avoid drifting.
   function latchModMaskOnce(id: bigint, desiredUntil: number): boolean {
     const nowS = Math.floor(Date.now() / 1000);
     if (!id || id === 0n) return false;
 
-    // If we're already latched for this id and it's still running, do nothing.
-    if (modMaskMessageIdRef.current === id && modMaskUntilRef.current > nowS) {
+    // If we've ever latched this id (until cleared), do nothing.
+    if (modMaskLatchedIdsRef.current.has(id)) {
       return false;
     }
 
@@ -3133,6 +3147,7 @@ function ActiveCard() {
 
     modMaskUntilRef.current = until;
     modMaskMessageIdRef.current = id;
+    modMaskLatchedIdsRef.current.add(id);
     try {
       writeMaskUntil(MOD_MASK_KEY, until, { messageId: id });
     } catch {}
@@ -3155,10 +3170,19 @@ function ActiveCard() {
       } catch {}
       try {
         const m = readMaskState(MOD_MASK_KEY);
-        modMaskUntilRef.current = m?.until > 0 ? Math.min(m.until, nowS + MASK_SECS) : 0;
+        const until = m?.until > 0 ? Math.min(m.until, nowS + MASK_SECS) : 0;
+        modMaskUntilRef.current = until;
         if (m?.messageId) {
           const id = parseMaskMessageId(m.messageId);
-          if (id > 0n) modMaskMessageIdRef.current = id;
+          if (id > 0n) {
+            modMaskMessageIdRef.current = id;
+            if (until > nowS) {
+              modMaskLatchedIdsRef.current.add(id);
+            }
+          }
+        }
+        if (until <= nowS) {
+          modMaskLatchedIdsRef.current.clear();
         }
       } catch {}
       try {
@@ -3207,14 +3231,22 @@ function ActiveCard() {
         nukeMaskMessageIdRef.current = stored;
       }
     }
+    const nowS = Math.floor(Date.now() / 1000);
     const persistedMod = readMaskState(MOD_MASK_KEY);
     if (persistedMod.until > modMaskUntilRef.current) {
-      modMaskUntilRef.current = persistedMod.until;
+      const capped = Math.min(persistedMod.until, nowS + MASK_SECS);
+      modMaskUntilRef.current = capped;
+      if (capped <= nowS) {
+        modMaskLatchedIdsRef.current.clear();
+      }
     }
     if (persistedMod.messageId) {
       const stored = parseMaskMessageId(persistedMod.messageId);
       if (stored > 0n) {
         modMaskMessageIdRef.current = stored;
+        if (modMaskUntilRef.current > nowS) {
+          modMaskLatchedIdsRef.current.add(stored);
+        }
       }
     }
   }, []);
@@ -3228,11 +3260,18 @@ function ActiveCard() {
       if (detail.key === MOD_MASK_KEY) {
         if (normalized > 0) {
           // clamp to at most freeze seconds from "now"
-          const cap = Math.floor(Date.now() / 1000) + maskSecsRef.current;
+          const nowS = Math.floor(Date.now() / 1000);
+          const cap = nowS + maskSecsRef.current;
           const capped = Math.min(normalized, cap);
           modMaskUntilRef.current = capped;
           if (evtId > 0n) {
             modMaskMessageIdRef.current = evtId;
+            if (capped > nowS) {
+              modMaskLatchedIdsRef.current.add(evtId);
+            }
+          }
+          if (capped <= nowS) {
+            modMaskLatchedIdsRef.current.clear();
           }
         } else {
           const prevId = modMaskMessageIdRef.current;
@@ -3243,6 +3282,7 @@ function ActiveCard() {
           modMaskMessageIdRef.current = 0n;
           setModFrozenMessage(null);
           modMaskUntilRef.current = 0;
+          modMaskLatchedIdsRef.current.clear();
         }
       } else if (detail.key === NUKE_MASK_KEY) {
         if (normalized > 0) {
@@ -3284,9 +3324,17 @@ function ActiveCard() {
         const msg = typeof parsed?.messageId === "string" ? parsed.messageId : undefined;
         const id = parseMaskMessageId(msg);
         if (ev.key === MOD_MASK_KEY) {
-          modMaskUntilRef.current =
-            until > 0 ? Math.min(until, nowS + maskSecsRef.current) : 0;
-          if (id > 0n) modMaskMessageIdRef.current = id;
+          const capped = until > 0 ? Math.min(until, nowS + maskSecsRef.current) : 0;
+          modMaskUntilRef.current = capped;
+          if (id > 0n) {
+            modMaskMessageIdRef.current = id;
+            if (capped > nowS) {
+              modMaskLatchedIdsRef.current.add(id);
+            }
+          }
+          if (capped <= nowS) {
+            modMaskLatchedIdsRef.current.clear();
+          }
         } else if (ev.key === NUKE_MASK_KEY) {
           nukeMaskUntilRef.current =
             until > 0 ? Math.min(until, nowS + maskSecsRef.current) : 0;
@@ -3313,6 +3361,7 @@ function ActiveCard() {
         // Always disarm on timer-based clear as well.
         disarmModFor(prevId, MOD_RETRIGGER_DEBOUNCE_SECS);
       }
+      modMaskLatchedIdsRef.current.clear();
       modMaskUntilRef.current = 0;
       modMaskMessageIdRef.current = 0n;
       writeMaskUntil(MOD_MASK_KEY, 0);
@@ -3541,6 +3590,7 @@ function ActiveCard() {
     if (modMaskMessageIdRef.current && modMaskMessageIdRef.current !== msgId) {
       modMaskUntilRef.current = 0;
       modMaskMessageIdRef.current = 0n;
+      modMaskLatchedIdsRef.current.clear();
       writeMaskUntil(MOD_MASK_KEY, 0);
       setModFrozenMessage(null);
       clearGloryMaskState();
