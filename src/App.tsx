@@ -3114,6 +3114,30 @@ function ActiveCard() {
   const nukeMaskMessageIdRef = React.useRef<bigint>(0n);
   const modMaskUntilRef = React.useRef(0);
   const modMaskMessageIdRef = React.useRef<bigint>(0n);
+
+  // Latch the moderation mask once per message id while it's active.
+  // - Never extend an already-active mask for the same id.
+  // - Clamp to at most MASK_SECS from "now" to avoid drifting.
+  function latchModMaskOnce(id: bigint, desiredUntil: number): boolean {
+    const nowS = Math.floor(Date.now() / 1000);
+    if (!id || id === 0n) return false;
+
+    // If we're already latched for this id and it's still running, do nothing.
+    if (modMaskMessageIdRef.current === id && modMaskUntilRef.current > nowS) {
+      return false;
+    }
+
+    // Never let the visible mask exceed "freeze from now".
+    const cap = nowS + maskSecsRef.current;
+    const until = Math.min(desiredUntil, cap);
+
+    modMaskUntilRef.current = until;
+    modMaskMessageIdRef.current = id;
+    try {
+      writeMaskUntil(MOD_MASK_KEY, until, { messageId: id });
+    } catch {}
+    return true;
+  }
   React.useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") return;
     const rehydrate = () => {
@@ -3318,21 +3342,19 @@ function ActiveCard() {
     // Respect disarm regardless of active/inactive state.
     if (isModDisarmed(latchedModId)) return;
 
-    const until = Math.floor(Date.now() / 1000) + NUKE_MASK_SECS;
-    if (until > modMaskUntilRef.current) {
-      modMaskUntilRef.current = until;
-      writeMaskUntil(MOD_MASK_KEY, until, { messageId: latchedModId });
-    }
-    modMaskMessageIdRef.current = latchedModId;
-
-    let latched = lastActiveMessageRef.current;
-    if (hasActive && msgId && msgId !== 0n && currentMessage && msgId === latchedModId) {
-      latched = { id: msgId, message: { ...(currentMessage as any) } };
-    }
+    const nowS = Math.floor(Date.now() / 1000);
+    const latched = latchModMaskOnce(latchedModId, nowS + NUKE_MASK_SECS);
     if (latched) {
-      setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
+      // Only capture the frozen message the first time we actually latch.
+      let latchedMsg = lastActiveMessageRef.current;
+      if (hasActive && msgId && msgId !== 0n && currentMessage && msgId === latchedModId) {
+        latchedMsg = { id: msgId, message: { ...(currentMessage as any) } };
+      }
+      if (latchedMsg) {
+        setModFrozenMessage({ id: latchedMsg.id, message: { ...latchedMsg.message } });
+      }
+      clearGloryMaskState();
     }
-    clearGloryMaskState();
   }, [
     hasActive,
     currentMessage,
@@ -3397,22 +3419,16 @@ function ActiveCard() {
       const nowS = Math.floor(Date.now() / 1000);
       const untilBase = nowS + NUKE_MASK_SECS;
       if (flagged) {
-        // never extend beyond freeze seconds from *now*
-        const capped = Math.min(untilBase, nowS + MASK_SECS);
-        if (capped > modMaskUntilRef.current) {
-          modMaskUntilRef.current = capped;
-          writeMaskUntil(MOD_MASK_KEY, capped, { messageId: msgId });
+        const latched = latchModMaskOnce(msgId, nowS + NUKE_MASK_SECS);
+        if (latched) {
+          const latchedMsg =
+            lastActiveMessageRef.current || {
+              id: msgId,
+              message: { ...(currentMessage as any) },
+            };
+          setModFrozenMessage({ id: latchedMsg.id, message: { ...latchedMsg.message } });
+          clearGloryMaskState();
         }
-        if (msgId && msgId !== 0n) {
-          modMaskMessageIdRef.current = msgId;
-        }
-        const latched =
-          lastActiveMessageRef.current || {
-            id: msgId,
-            message: { ...(currentMessage as any) },
-          };
-        setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
-        clearGloryMaskState();
       } else {
         const capped = Math.min(untilBase, nowS + MASK_SECS);
         if (capped > nukeMaskUntilRef.current) {
@@ -3474,25 +3490,17 @@ function ActiveCard() {
         // Respect disarm even if a new post is already active.
         if (isModDisarmed(idToCheck)) return;
         if (masksSuppressed(MOD_MASK_KEY)) return;
-        // never extend beyond freeze seconds from *now*
-        const capped = Math.min(untilBase, nowS + MASK_SECS);
-        if (capped > modMaskUntilRef.current) {
-          modMaskUntilRef.current = capped;
-          writeMaskUntil(MOD_MASK_KEY, capped, { messageId: idToCheck });
-        }
-        if (idToCheck && idToCheck !== 0n) {
-          modMaskMessageIdRef.current = idToCheck;
-        }
-        let latched = lastActiveMessageRef.current;
-        if (!latched || latched.id !== idToCheck) {
-          if (mFinal) {
-            latched = { id: idToCheck, message: { ...mFinal } };
-          }
-        }
+        const latched = latchModMaskOnce(idToCheck, nowS + NUKE_MASK_SECS);
         if (latched) {
-          setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
+          let latchedMsg = lastActiveMessageRef.current;
+          if (!latchedMsg || latchedMsg.id !== idToCheck) {
+            if (mFinal) latchedMsg = { id: idToCheck, message: { ...mFinal } };
+          }
+          if (latchedMsg) {
+            setModFrozenMessage({ id: latchedMsg.id, message: { ...latchedMsg.message } });
+          }
+          clearGloryMaskState();
         }
-        clearGloryMaskState();
         return;
       }
 
