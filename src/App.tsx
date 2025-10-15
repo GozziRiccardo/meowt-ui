@@ -2030,6 +2030,12 @@ function useGameSnapshot() {
   const cooldownLeft = Math.max(0, cooldownEnd - nowSec);
   const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
   const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
+  const definitelyInGlory =
+    exposureAnchored &&
+    exposureLeft === 0 &&
+    gloryEnd > nowSec &&
+    !gloryGuardActive &&
+    immLeft === 0;
 
   const showModMask = React.useMemo(() => {
     if (!hasId || !idMatchesRefs || !idBig) return false;
@@ -2105,6 +2111,21 @@ function useGameSnapshot() {
     showGloryMask,
   ]);
 
+  React.useEffect(() => {
+    if (!hasId || !idMatchesRefs) return;
+    if (gloryPreOkRef.current) return;
+    if (!definitelyInGlory) return;
+    if (showModMask || showNukeMask || showGloryMask) return;
+    gloryPreOkRef.current = true;
+  }, [
+    hasId,
+    idMatchesRefs,
+    definitelyInGlory,
+    showModMask,
+    showNukeMask,
+    showGloryMask,
+  ]);
+
   // Disarm pre-glory latch whenever we are idle (no active message).
   React.useEffect(() => {
     const remNow = Number(remChainBN ?? 0n);
@@ -2131,13 +2152,7 @@ function useGameSnapshot() {
 
   // Only consider glory for the *current* message once exposure end is anchored and passed.
   // This makes “entering glory” equivalent to the exposure countdown reaching zero.
-  const inGlory =
-    exposureLeft === 0 &&
-    gloryEnd > nowSec &&
-    exposureAnchored &&
-    !gloryGuardActive &&
-    gloryPreOk &&
-    !immLeft;
+  const inGlory = definitelyInGlory && gloryPreOk;
 
   // Anchored glory time left for the UI (no fallback to global gloryRemaining).
   const gloryLeftUi =
