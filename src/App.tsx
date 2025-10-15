@@ -1808,6 +1808,7 @@ function useGameSnapshot() {
     cooldownEndRef.current = 0;
     if (predictedImmEnd > 0) {
       immEndRef.current = Math.max(immEndRef.current, predictedImmEnd);
+      gloryEntryLatchRef.current = false;
       // Latch the post/replace guard so we cannot enter glory during the new immunity.
       gloryGuardUntilRef.current = Math.max(gloryGuardUntilRef.current, predictedImmEnd);
       try { writeMaskUntil(IMMUNITY_KEY, predictedImmEnd, { messageId: idBig }); } catch {}
@@ -2074,8 +2075,10 @@ function useGameSnapshot() {
     if (gloryEntryLatchRef.current) return;
     if (exposureEnd <= 0) return;
 
+    if (immLeft > 0 || gloryGuardActive) return;
+
     const exposureRemaining = Math.max(0, exposureEnd - nowSec);
-    if (exposureRemaining > 0 && exposureRemaining <= PRE_GLORY_GUARD_SECS && !gloryGuardActive) {
+    if (exposureRemaining > 0 && exposureRemaining <= PRE_GLORY_GUARD_SECS) {
       gloryEntryLatchRef.current = true;
     }
   }, [
@@ -2086,6 +2089,7 @@ function useGameSnapshot() {
     nowSec,
     PRE_GLORY_GUARD_SECS,
     gloryGuardActive,
+    immLeft,
   ]);
 
   // Only consider glory for the *current* message once exposure end is anchored and passed.
@@ -2947,14 +2951,22 @@ function ActiveCard() {
     gloryMaskSpanRef.current = GLORY_MASK_MAX_SPAN;
   }, [MASK_SECS, GLORY_MASK_MAX_SPAN]);
   React.useEffect(() => {
-    const tick = () => setNow(computeNow());
+    const tick = () =>
+      setNow((prev) => {
+        const next = computeNow();
+        return next >= prev ? next : prev;
+      });
     tick();
     const iv = setInterval(tick, 500);
     return () => clearInterval(iv);
   }, [computeNow]);
   React.useEffect(() => {
     if (typeof document === "undefined") return;
-    const onVis = () => setNow(computeNow());
+    const onVis = () =>
+      setNow((prev) => {
+        const next = computeNow();
+        return next >= prev ? next : prev;
+      });
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [computeNow]);
