@@ -520,7 +520,7 @@ async function ensureAllowanceThenSettle(
   return true; // approval happened
 }
 
-type MaskPersisted = { until: number; messageId?: string; clampBase?: number };
+type MaskPersisted = { until: number; messageId?: string };
 
 function readMaskState(key: string): MaskPersisted {
   try {
@@ -534,13 +534,9 @@ function readMaskState(key: string): MaskPersisted {
           ? Math.max(0, Math.floor(parsed.until))
           : 0;
         const msgId = typeof parsed?.messageId === "string" ? parsed.messageId : undefined;
-        const clampBase = Number.isFinite(parsed?.clampBase)
-          ? Math.max(0, Math.floor(parsed.clampBase))
-          : undefined;
         return {
           until,
           messageId: msgId && msgId !== "0" ? msgId : undefined,
-          clampBase,
         };
       } catch {
         /* fall through to numeric parse */
@@ -596,35 +592,25 @@ function writeWindowTimes(
 }
 
 const MASK_EVENT = "meowt:mask:update";
-type MaskEventDetail = {
-  key: string;
-  until: number;
-  messageId?: string | null;
-  clampBase?: number | null;
-};
+type MaskEventDetail = { key: string; until: number; messageId?: string | null };
 
-function emitMaskUpdate(key: string, until: number, messageId?: string, clampBase?: number) {
+function emitMaskUpdate(key: string, until: number, messageId?: string) {
   if (typeof window === "undefined") return;
   try {
     window.dispatchEvent(
       new CustomEvent<MaskEventDetail>(MASK_EVENT, {
-        detail: { key, until, messageId: messageId ?? null, clampBase: clampBase ?? null },
+        detail: { key, until, messageId: messageId ?? null },
       })
     );
   } catch {
     // Older browsers might not support the generic signature
     window.dispatchEvent(
-      new CustomEvent(MASK_EVENT, {
-        detail: { key, until, messageId: messageId ?? null, clampBase: clampBase ?? null },
-      })
+      new CustomEvent(MASK_EVENT, { detail: { key, until, messageId: messageId ?? null } })
     );
   }
 }
 
-type MaskWriteOptions = {
-  messageId?: bigint | number | string | null;
-  clampBase?: number | null;
-};
+type MaskWriteOptions = { messageId?: bigint | number | string | null };
 
 function normalizeMaskMessageId(raw: MaskWriteOptions["messageId"]): string | undefined {
   if (raw === null || typeof raw === "undefined") return undefined;
@@ -648,16 +634,10 @@ function normalizeMaskMessageId(raw: MaskWriteOptions["messageId"]): string | un
 function writeMaskUntil(key: string, until: number, opts?: MaskWriteOptions) {
   const normalizedUntil = Number.isFinite(until) ? Math.max(0, Math.floor(until)) : 0;
   const messageId = normalizeMaskMessageId(opts?.messageId);
-  const normalizedClampBase = Number.isFinite(opts?.clampBase)
-    ? Math.max(0, Math.floor(opts!.clampBase!))
-    : undefined;
   try {
     if (normalizedUntil > 0) {
       const payload: MaskPersisted = { until: normalizedUntil };
       if (messageId) payload.messageId = messageId;
-      if (normalizedClampBase && normalizedClampBase > 0) {
-        payload.clampBase = normalizedClampBase;
-      }
       localStorage.setItem(key, JSON.stringify(payload));
     } else {
       localStorage.removeItem(key);
@@ -665,7 +645,7 @@ function writeMaskUntil(key: string, until: number, opts?: MaskWriteOptions) {
   } catch {
     /* ignore */
   }
-  emitMaskUpdate(key, normalizedUntil, messageId, normalizedClampBase);
+  emitMaskUpdate(key, normalizedUntil, messageId);
 }
 
 function parseMaskMessageId(raw?: string | null): bigint {
@@ -2902,10 +2882,7 @@ function MaskStorageSync() {
           payload?.messageId === null || typeof payload?.messageId === "undefined"
             ? undefined
             : String(payload.messageId);
-        const clampBase = Number.isFinite(payload?.clampBase)
-          ? Math.max(0, Math.floor(payload.clampBase))
-          : undefined;
-        emitMaskUpdate(e.key, until, messageId, clampBase);
+        emitMaskUpdate(e.key, until, messageId);
       } catch {
         emitMaskUpdate(e.key, 0);
       }
@@ -2931,7 +2908,6 @@ function ActiveCard() {
   const { quiet, setQuiet } = useQuiet();
   const hasActive = Boolean((snap as any)?.show);
   const rehydrated = snap.rehydrationComplete;
-  const snapNowSec = Number((snap as any)?.nowSec ?? 0);
 
   const lk = (snap as any)?.lockKind as "boost" | "glory" | "immunity" | "none";
   const timerOverride =
@@ -2989,51 +2965,24 @@ function ActiveCard() {
   const MASK_SECS = Number((snap as any)?.winFreeze ?? 11);
 
   const computeNow = React.useCallback(() => {
-    if (Number.isFinite(snapNowSec) && snapNowSec > 0) return Math.floor(snapNowSec);
+    const snapNow = Number((snap as any)?.nowSec ?? 0);
+    if (Number.isFinite(snapNow) && snapNow > 0) return Math.floor(snapNow);
     return Math.floor(Date.now() / 1000);
-  }, [snapNowSec]);
+  }, [snap]);
   const [now, setNow] = React.useState(() => computeNow());
+  const rehydrateMasksOnResumeDeps = [
+    glorySec,
+    MASK_SECS,
+    Number((snap as any)?.nowSec ?? 0),
+  ]; // only for eslint happiness
   // For cross-tab clamping: visible glory mask should never exceed freeze + pad
   const GLORY_MASK_MAX_SPAN = Math.max(0, MASK_SECS + GLORY_MASK_LATCH_PAD);
   const maskSecsRef = React.useRef(MASK_SECS);
   const gloryMaskSpanRef = React.useRef(GLORY_MASK_MAX_SPAN);
-  const maskClampNowRef = React.useRef(0);
-  const resolveClampBase = React.useCallback((hint?: number, spanOverride?: number) => {
-    const wallNow = Math.floor(Date.now() / 1000);
-    const normalizedHint =
-      typeof hint === "number" && Number.isFinite(hint) && hint > 0 ? Math.floor(hint) : 0;
-    let base = maskClampNowRef.current > 0 ? maskClampNowRef.current : 0;
-    if (normalizedHint > 0) {
-      base = Math.max(base, normalizedHint);
-    }
-    const overrideSpan =
-      typeof spanOverride === "number" && Number.isFinite(spanOverride) && spanOverride > 0
-        ? Math.floor(spanOverride)
-        : undefined;
-    const span = Math.max(0, overrideSpan ?? maskSecsRef.current);
-    if (base > 0 && base + span < wallNow) {
-      base = wallNow;
-    } else if (base <= 0) {
-      base = wallNow;
-    }
-    maskClampNowRef.current = base;
-    return base;
-  }, []);
-  const rehydrateMasksOnResumeDeps = [glorySec, MASK_SECS, snapNowSec, resolveClampBase]; // only for eslint happiness
   React.useEffect(() => {
     maskSecsRef.current = MASK_SECS;
     gloryMaskSpanRef.current = GLORY_MASK_MAX_SPAN;
   }, [MASK_SECS, GLORY_MASK_MAX_SPAN]);
-  React.useEffect(() => {
-    if (Number.isFinite(snapNowSec) && snapNowSec > 0) {
-      maskClampNowRef.current = Math.floor(snapNowSec);
-    }
-  }, [snapNowSec]);
-  React.useEffect(() => {
-    if (Number.isFinite(now) && now > 0) {
-      maskClampNowRef.current = Math.floor(now);
-    }
-  }, [now]);
   React.useEffect(() => {
     const tick = () => setNow(computeNow());
     tick();
@@ -3060,9 +3009,6 @@ function ActiveCard() {
   React.useEffect(() => {
     const nowSec = Math.floor(Date.now() / 1000);
     const persisted = readMaskState(GLORY_MASK_KEY);
-    if (persisted.clampBase && persisted.clampBase > 0) {
-      resolveClampBase(persisted.clampBase, GLORY_MAX_SPAN);
-    }
     // MIGRATION: if no messageId was saved, drop legacy entry to avoid false latching
     if (persisted.until > 0 && !persisted.messageId) {
       writeMaskUntil(GLORY_MASK_KEY, 0);
@@ -3079,7 +3025,7 @@ function ActiveCard() {
       }
     }
     rehydrationStartedRef.current = rehydrated;
-  }, [rehydrated, GLORY_MAX_SPAN, resolveClampBase]);
+  }, [rehydrated, GLORY_MAX_SPAN]);
 
   // Persist once when we ENTER the latch window (last 2s of glory)
   const predictedGloryEnd = Number((snap as any)?.gloryPredictedEnd ?? 0);
@@ -3104,17 +3050,13 @@ function ActiveCard() {
       gloryPersistWroteEndRef.current !== predictedMaskEnd ||
       gloryPersistWroteIdRef.current !== msgId
     ) {
-      const clampBase = resolveClampBase(now, gloryMaskSpanRef.current);
       gloryUntilRef.current = predictedMaskEnd;
       gloryMaskMessageIdRef.current = msgId;
       gloryPersistWroteEndRef.current = predictedMaskEnd;
       gloryPersistWroteIdRef.current = msgId;
-      writeMaskUntil(GLORY_MASK_KEY, predictedMaskEnd, {
-        messageId: msgId,
-        clampBase,
-      });
+      writeMaskUntil(GLORY_MASK_KEY, predictedMaskEnd, { messageId: msgId });
     }
-  }, [now, msgId, predictedMaskEnd, MASK_SECS, resolveClampBase]);
+  }, [now, msgId, predictedMaskEnd, MASK_SECS]);
 
   // Natural end or message switch → clear persisted mask
   React.useEffect(() => {
@@ -3174,19 +3116,9 @@ function ActiveCard() {
   const nukeMaskMessageIdRef = React.useRef<bigint>(0n);
   const modMaskUntilRef = React.useRef(0);
   const modMaskMessageIdRef = React.useRef<bigint>(0n);
-  function broadcastMaskEvent(
-    type: "mod" | "nuke",
-    until: number,
-    msgId: bigint,
-    clampBase?: number
-  ) {
+  function broadcastMaskEvent(type: "mod" | "nuke", until: number, msgId: bigint) {
     try {
-      emitMaskUpdate(
-        type === "mod" ? MOD_MASK_KEY : NUKE_MASK_KEY,
-        until,
-        String(msgId),
-        clampBase
-      );
+      emitMaskUpdate(type === "mod" ? MOD_MASK_KEY : NUKE_MASK_KEY, until, String(msgId));
     } catch {}
   }
   React.useEffect(() => {
@@ -3194,9 +3126,6 @@ function ActiveCard() {
     const syncFromStorage = (nowS: number) => {
       try {
         const g = readMaskState(GLORY_MASK_KEY);
-        if (g?.clampBase && g.clampBase > 0) {
-          resolveClampBase(g.clampBase, GLORY_MASK_MAX_SPAN);
-        }
         if (g?.until > 0) {
           const clipped = Math.min(g.until, nowS + GLORY_MASK_MAX_SPAN);
           gloryUntilRef.current = clipped > nowS ? clipped : 0;
@@ -3208,9 +3137,6 @@ function ActiveCard() {
       } catch {}
       try {
         const m = readMaskState(MOD_MASK_KEY);
-        if (m?.clampBase && m.clampBase > 0) {
-          resolveClampBase(m.clampBase, maskSecsRef.current);
-        }
         if (m?.until > 0 && m.until > nowS && m.until - nowS <= MASK_SECS + 5) {
           modMaskUntilRef.current = m.until;
         } else if (m?.until > 0) {
@@ -3224,9 +3150,6 @@ function ActiveCard() {
       } catch {}
       try {
         const n = readMaskState(NUKE_MASK_KEY);
-        if (n?.clampBase && n.clampBase > 0) {
-          resolveClampBase(n.clampBase, maskSecsRef.current);
-        }
         if (n?.until > 0 && n.until > nowS && n.until - nowS <= MASK_SECS + 5) {
           nukeMaskUntilRef.current = n.until;
         } else if (n?.until > 0) {
@@ -3277,9 +3200,6 @@ function ActiveCard() {
   }
   React.useEffect(() => {
     const persistedNuke = readMaskState(NUKE_MASK_KEY);
-    if (persistedNuke.clampBase && persistedNuke.clampBase > 0) {
-      resolveClampBase(persistedNuke.clampBase, maskSecsRef.current);
-    }
     if (persistedNuke.until > nukeMaskUntilRef.current) {
       nukeMaskUntilRef.current = persistedNuke.until;
     }
@@ -3290,9 +3210,6 @@ function ActiveCard() {
       }
     }
     const persistedMod = readMaskState(MOD_MASK_KEY);
-    if (persistedMod.clampBase && persistedMod.clampBase > 0) {
-      resolveClampBase(persistedMod.clampBase, maskSecsRef.current);
-    }
     if (persistedMod.until > modMaskUntilRef.current) {
       modMaskUntilRef.current = persistedMod.until;
     }
@@ -3312,18 +3229,14 @@ function ActiveCard() {
       const evtId = parseMaskMessageId(detail.messageId ?? undefined);
       if (detail.key === MOD_MASK_KEY) {
         if (normalized > 0) {
-          const span = maskSecsRef.current;
-          const base = resolveClampBase(detail.clampBase ?? undefined, span);
-          const cap = base + span;
+          // clamp to at most freeze seconds from "now"
+          const cap = Math.floor(Date.now() / 1000) + maskSecsRef.current;
           const capped = Math.min(normalized, cap);
           modMaskUntilRef.current = capped;
           if (evtId > 0n) {
             modMaskMessageIdRef.current = evtId;
           }
         } else {
-          if (detail.clampBase && detail.clampBase > 0) {
-            resolveClampBase(detail.clampBase, maskSecsRef.current);
-          }
           const prevId = modMaskMessageIdRef.current;
           if (prevId && prevId !== 0n) {
             // Always disarm so the next post won't echo the MOD mask.
@@ -3335,35 +3248,27 @@ function ActiveCard() {
         }
       } else if (detail.key === NUKE_MASK_KEY) {
         if (normalized > 0) {
-          const span = maskSecsRef.current;
-          const base = resolveClampBase(detail.clampBase ?? undefined, span);
-          const cap = base + span;
+          // clamp to at most freeze seconds from "now"
+          const cap = Math.floor(Date.now() / 1000) + maskSecsRef.current;
           const capped = Math.min(normalized, cap);
           nukeMaskUntilRef.current = capped;
           if (evtId > 0n) {
             nukeMaskMessageIdRef.current = evtId;
           }
         } else {
-          if (detail.clampBase && detail.clampBase > 0) {
-            resolveClampBase(detail.clampBase, maskSecsRef.current);
-          }
           nukeMaskMessageIdRef.current = 0n;
           nukeMaskUntilRef.current = 0;
         }
       } else if (detail.key === GLORY_MASK_KEY) {
         if (normalized > 0) {
-          const span = gloryMaskSpanRef.current;
-          const base = resolveClampBase(detail.clampBase ?? undefined, span);
-          const cap = base + span;
+          // clamp to at most (freeze + latchPad) seconds from "now"
+          const cap = Math.floor(Date.now() / 1000) + gloryMaskSpanRef.current;
           const capped = Math.min(normalized, cap);
           gloryUntilRef.current = capped;
           if (evtId > 0n) {
             gloryMaskMessageIdRef.current = evtId;
           }
         } else {
-          if (detail.clampBase && detail.clampBase > 0) {
-            resolveClampBase(detail.clampBase, gloryMaskSpanRef.current);
-          }
           gloryMaskMessageIdRef.current = 0n;
           gloryUntilRef.current = 0;
         }
@@ -3375,30 +3280,22 @@ function ActiveCard() {
       if (ev.key !== MOD_MASK_KEY && ev.key !== NUKE_MASK_KEY && ev.key !== GLORY_MASK_KEY)
         return;
       try {
+        const nowS = Math.floor(Date.now() / 1000);
         const parsed = ev.newValue ? JSON.parse(ev.newValue) : null;
         const until = Math.floor(Number(parsed?.until ?? 0));
         const msg = typeof parsed?.messageId === "string" ? parsed.messageId : undefined;
         const id = parseMaskMessageId(msg);
-        const clampBase = Number.isFinite(parsed?.clampBase)
-          ? Math.max(0, Math.floor(parsed.clampBase))
-          : 0;
         if (ev.key === MOD_MASK_KEY) {
-          const span = maskSecsRef.current;
-          const base = resolveClampBase(clampBase > 0 ? clampBase : undefined, span);
-          const cap = base + span;
-          modMaskUntilRef.current = until > 0 ? Math.min(until, cap) : 0;
+          modMaskUntilRef.current =
+            until > 0 ? Math.min(until, nowS + maskSecsRef.current) : 0;
           if (id > 0n) modMaskMessageIdRef.current = id;
         } else if (ev.key === NUKE_MASK_KEY) {
-          const span = maskSecsRef.current;
-          const base = resolveClampBase(clampBase > 0 ? clampBase : undefined, span);
-          const cap = base + span;
-          nukeMaskUntilRef.current = until > 0 ? Math.min(until, cap) : 0;
+          nukeMaskUntilRef.current =
+            until > 0 ? Math.min(until, nowS + maskSecsRef.current) : 0;
           if (id > 0n) nukeMaskMessageIdRef.current = id;
         } else if (ev.key === GLORY_MASK_KEY) {
-          const span = gloryMaskSpanRef.current;
-          const base = resolveClampBase(clampBase > 0 ? clampBase : undefined, span);
-          const cap = base + span;
-          gloryUntilRef.current = until > 0 ? Math.min(until, cap) : 0;
+          gloryUntilRef.current =
+            until > 0 ? Math.min(until, nowS + gloryMaskSpanRef.current) : 0;
           if (id > 0n) gloryMaskMessageIdRef.current = id;
         }
       } catch {
@@ -3453,16 +3350,13 @@ function ActiveCard() {
     if (!Number.isFinite(chainNowS) || chainNowS <= 0) return;
 
     const maskDurationSecs = NUKE_MASK_SECS;
-    const clampBase = resolveClampBase(chainNowS, maskSecsRef.current);
-    const start = Math.max(clampBase, chainNowS > 0 ? Math.floor(chainNowS) : 0);
-    const until = start + maskDurationSecs;
-    const capped = Math.min(until, clampBase + maskSecsRef.current);
+    const until = chainNowS + maskDurationSecs;
 
-    if (capped > modMaskUntilRef.current) {
-      modMaskUntilRef.current = capped;
-      writeMaskUntil(MOD_MASK_KEY, capped, { messageId: latchedModId, clampBase });
+    if (until > modMaskUntilRef.current) {
+      modMaskUntilRef.current = until;
+      writeMaskUntil(MOD_MASK_KEY, until, { messageId: latchedModId });
       // Broadcast to other tabs immediately
-      broadcastMaskEvent("mod", capped, latchedModId, clampBase);
+      broadcastMaskEvent("mod", until, latchedModId);
     }
     modMaskMessageIdRef.current = latchedModId;
 
@@ -3481,7 +3375,6 @@ function ActiveCard() {
     msgId,
     NUKE_MASK_SECS,
     snap,
-    resolveClampBase,
   ]);
   React.useEffect(() => {
     if (hasActive) setModFrozenMessage(null);
@@ -3535,15 +3428,13 @@ function ActiveCard() {
       if (masksSuppressed(flagged ? MOD_MASK_KEY : NUKE_MASK_KEY)) return;
 
       const nowS = Math.floor(Date.now() / 1000);
-      const clampBase = resolveClampBase(nowS, maskSecsRef.current);
-      const untilBase = clampBase + NUKE_MASK_SECS;
-      const cap = clampBase + MASK_SECS;
+      const untilBase = nowS + NUKE_MASK_SECS;
       if (flagged) {
         // never extend beyond freeze seconds from *now*
-        const capped = Math.min(untilBase, cap);
+        const capped = Math.min(untilBase, nowS + MASK_SECS);
         if (capped > modMaskUntilRef.current) {
           modMaskUntilRef.current = capped;
-          writeMaskUntil(MOD_MASK_KEY, capped, { messageId: msgId, clampBase });
+          writeMaskUntil(MOD_MASK_KEY, capped, { messageId: msgId });
         }
         if (msgId && msgId !== 0n) {
           modMaskMessageIdRef.current = msgId;
@@ -3555,11 +3446,11 @@ function ActiveCard() {
           };
         setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
       } else {
-        const capped = Math.min(untilBase, cap);
+        const capped = Math.min(untilBase, nowS + MASK_SECS);
         if (capped > nukeMaskUntilRef.current) {
           nukeMaskUntilRef.current = capped;
           nukeMaskMessageIdRef.current = msgId ?? 0n;
-          writeMaskUntil(NUKE_MASK_KEY, capped, { messageId: msgId, clampBase });
+          writeMaskUntil(NUKE_MASK_KEY, capped, { messageId: msgId });
         }
       }
     })();
@@ -3567,7 +3458,7 @@ function ActiveCard() {
     return () => {
       cancelled = true;
     };
-  }, [hasActive, currentMessage, msgId, publicClient, NUKE_MASK_SECS, resolveClampBase]);
+  }, [hasActive, currentMessage, msgId, publicClient, NUKE_MASK_SECS]);
 
   async function probeResolution(idToCheck: bigint) {
     if (masksSuppressed()) return;
@@ -3613,22 +3504,16 @@ function ActiveCard() {
       if (!Number.isFinite(chainNowS) || chainNowS <= 0) return;
 
       const maskDurationSecs = NUKE_MASK_SECS;
-      const clampBase = resolveClampBase(chainNowS, maskSecsRef.current);
-      const start = Math.max(clampBase, chainNowS > 0 ? Math.floor(chainNowS) : 0);
-      const untilBase = start + maskDurationSecs;
-      const cap = clampBase + maskSecsRef.current;
+      const untilBase = chainNowS + maskDurationSecs;
 
       if (flagged) {
         if (isModDisarmed(idToCheck)) return;
         if (masksSuppressed(MOD_MASK_KEY)) return;
-        const until = Math.min(untilBase, cap);
+        const until = untilBase;
         if (until > modMaskUntilRef.current) {
           modMaskUntilRef.current = until;
-          writeMaskUntil(MOD_MASK_KEY, until, {
-            messageId: idToCheck,
-            clampBase,
-          });
-          broadcastMaskEvent("mod", until, idToCheck, clampBase);
+          writeMaskUntil(MOD_MASK_KEY, until, { messageId: idToCheck });
+          broadcastMaskEvent("mod", until, idToCheck);
         }
         if (idToCheck && idToCheck !== 0n) {
           modMaskMessageIdRef.current = idToCheck;
@@ -3648,15 +3533,12 @@ function ActiveCard() {
       if (!nuked) return;
 
       if (masksSuppressed(NUKE_MASK_KEY)) return;
-      const until = Math.min(untilBase, cap);
+      const until = untilBase;
       if (until > nukeMaskUntilRef.current) {
         nukeMaskUntilRef.current = until;
         nukeMaskMessageIdRef.current = idToCheck ?? 0n;
-        writeMaskUntil(NUKE_MASK_KEY, until, {
-          messageId: idToCheck,
-          clampBase,
-        });
-        broadcastMaskEvent("nuke", until, idToCheck ?? 0n, clampBase);
+        writeMaskUntil(NUKE_MASK_KEY, until, { messageId: idToCheck });
+        broadcastMaskEvent("nuke", until, idToCheck ?? 0n);
       }
     } catch {
       /* ignore */
