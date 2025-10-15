@@ -2912,7 +2912,7 @@ function ActiveCard() {
   });
   const hasVotedOnChain = Number(voteSide ?? 0n) !== 0;
 
-  const { data: modFlaggedLive } = useReadContract({
+  const { data: modFlaggedLive, fetchStatus: modFlaggedFetchStatus } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
     functionName: "modFlagged",
@@ -3300,6 +3300,7 @@ function ActiveCard() {
   }, [hasActive, msgId, currentMessage]);
 
   React.useEffect(() => {
+    if (modFlaggedFetchStatus === "fetching") return;
     if (!modFlaggedLive) return;
     if (!latchedModId || latchedModId === 0n) return;
     if (masksSuppressed(MOD_MASK_KEY)) return;
@@ -3325,6 +3326,7 @@ function ActiveCard() {
     hasActive,
     currentMessage,
     latchedModId,
+    modFlaggedFetchStatus,
     modFlaggedLive,
     msgId,
     NUKE_MASK_SECS,
@@ -3512,6 +3514,7 @@ function ActiveCard() {
 
   React.useEffect(() => {
     if (!hasActive || !msgId || msgId === 0n) return;
+    if (modFlaggedFetchStatus === "fetching") return;
     if (modFlaggedLive && latchedModId === msgId) {
       modMaskMessageIdRef.current = msgId;
       return;
@@ -3523,7 +3526,14 @@ function ActiveCard() {
       setModFrozenMessage(null);
       clearGloryMaskState();
     }
-  }, [hasActive, latchedModId, modFlaggedLive, msgId, clearGloryMaskState]);
+  }, [
+    hasActive,
+    latchedModId,
+    modFlaggedFetchStatus,
+    modFlaggedLive,
+    msgId,
+    clearGloryMaskState,
+  ]);
 
   React.useEffect(() => {
     const wasActive = hadActiveRef.current;
