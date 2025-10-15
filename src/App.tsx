@@ -2993,7 +2993,6 @@ function ActiveCard() {
     return Math.floor(Date.now() / 1000);
   }, [snapNowSec]);
   const [now, setNow] = React.useState(() => computeNow());
-  const rehydrateMasksOnResumeDeps = [glorySec, MASK_SECS, snapNowSec, resolveClampBase]; // only for eslint happiness
   // For cross-tab clamping: visible glory mask should never exceed freeze + pad
   const GLORY_MASK_MAX_SPAN = Math.max(0, MASK_SECS + GLORY_MASK_LATCH_PAD);
   const maskSecsRef = React.useRef(MASK_SECS);
@@ -3020,6 +3019,7 @@ function ActiveCard() {
     maskClampNowRef.current = base;
     return base;
   }, []);
+  const rehydrateMasksOnResumeDeps = [glorySec, MASK_SECS, snapNowSec, resolveClampBase]; // only for eslint happiness
   React.useEffect(() => {
     maskSecsRef.current = MASK_SECS;
     gloryMaskSpanRef.current = GLORY_MASK_MAX_SPAN;
