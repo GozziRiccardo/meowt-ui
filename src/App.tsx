@@ -2908,6 +2908,7 @@ function ActiveCard() {
   const { quiet, setQuiet } = useQuiet();
   const hasActive = Boolean((snap as any)?.show);
   const rehydrated = snap.rehydrationComplete;
+  const snapNowSec = Number((snap as any)?.nowSec ?? 0);
 
   const lk = (snap as any)?.lockKind as "boost" | "glory" | "immunity" | "none";
   const timerOverride =
@@ -2965,24 +2966,30 @@ function ActiveCard() {
   const MASK_SECS = Number((snap as any)?.winFreeze ?? 11);
 
   const computeNow = React.useCallback(() => {
-    const snapNow = Number((snap as any)?.nowSec ?? 0);
-    if (Number.isFinite(snapNow) && snapNow > 0) return Math.floor(snapNow);
+    if (Number.isFinite(snapNowSec) && snapNowSec > 0) return Math.floor(snapNowSec);
     return Math.floor(Date.now() / 1000);
-  }, [snap]);
+  }, [snapNowSec]);
   const [now, setNow] = React.useState(() => computeNow());
-  const rehydrateMasksOnResumeDeps = [
-    glorySec,
-    MASK_SECS,
-    Number((snap as any)?.nowSec ?? 0),
-  ]; // only for eslint happiness
+  const rehydrateMasksOnResumeDeps = [glorySec, MASK_SECS, snapNowSec]; // only for eslint happiness
   // For cross-tab clamping: visible glory mask should never exceed freeze + pad
   const GLORY_MASK_MAX_SPAN = Math.max(0, MASK_SECS + GLORY_MASK_LATCH_PAD);
   const maskSecsRef = React.useRef(MASK_SECS);
   const gloryMaskSpanRef = React.useRef(GLORY_MASK_MAX_SPAN);
+  const maskClampNowRef = React.useRef(0);
   React.useEffect(() => {
     maskSecsRef.current = MASK_SECS;
     gloryMaskSpanRef.current = GLORY_MASK_MAX_SPAN;
   }, [MASK_SECS, GLORY_MASK_MAX_SPAN]);
+  React.useEffect(() => {
+    if (Number.isFinite(snapNowSec) && snapNowSec > 0) {
+      maskClampNowRef.current = Math.floor(snapNowSec);
+    }
+  }, [snapNowSec]);
+  React.useEffect(() => {
+    if (Number.isFinite(now) && now > 0) {
+      maskClampNowRef.current = Math.floor(now);
+    }
+  }, [now]);
   React.useEffect(() => {
     const tick = () => setNow(computeNow());
     tick();
@@ -3229,8 +3236,12 @@ function ActiveCard() {
       const evtId = parseMaskMessageId(detail.messageId ?? undefined);
       if (detail.key === MOD_MASK_KEY) {
         if (normalized > 0) {
-          // clamp to at most freeze seconds from "now"
-          const cap = Math.floor(Date.now() / 1000) + maskSecsRef.current;
+          // clamp to at most freeze seconds from chain time snapshot
+          const base =
+            maskClampNowRef.current > 0
+              ? maskClampNowRef.current
+              : Math.floor(Date.now() / 1000);
+          const cap = base + maskSecsRef.current;
           const capped = Math.min(normalized, cap);
           modMaskUntilRef.current = capped;
           if (evtId > 0n) {
@@ -3248,8 +3259,12 @@ function ActiveCard() {
         }
       } else if (detail.key === NUKE_MASK_KEY) {
         if (normalized > 0) {
-          // clamp to at most freeze seconds from "now"
-          const cap = Math.floor(Date.now() / 1000) + maskSecsRef.current;
+          // clamp to at most freeze seconds from chain time snapshot
+          const base =
+            maskClampNowRef.current > 0
+              ? maskClampNowRef.current
+              : Math.floor(Date.now() / 1000);
+          const cap = base + maskSecsRef.current;
           const capped = Math.min(normalized, cap);
           nukeMaskUntilRef.current = capped;
           if (evtId > 0n) {
@@ -3261,8 +3276,12 @@ function ActiveCard() {
         }
       } else if (detail.key === GLORY_MASK_KEY) {
         if (normalized > 0) {
-          // clamp to at most (freeze + latchPad) seconds from "now"
-          const cap = Math.floor(Date.now() / 1000) + gloryMaskSpanRef.current;
+          // clamp to at most (freeze + latchPad) seconds from chain time snapshot
+          const base =
+            maskClampNowRef.current > 0
+              ? maskClampNowRef.current
+              : Math.floor(Date.now() / 1000);
+          const cap = base + gloryMaskSpanRef.current;
           const capped = Math.min(normalized, cap);
           gloryUntilRef.current = capped;
           if (evtId > 0n) {
@@ -3280,7 +3299,10 @@ function ActiveCard() {
       if (ev.key !== MOD_MASK_KEY && ev.key !== NUKE_MASK_KEY && ev.key !== GLORY_MASK_KEY)
         return;
       try {
-        const nowS = Math.floor(Date.now() / 1000);
+        const nowS =
+          maskClampNowRef.current > 0
+            ? maskClampNowRef.current
+            : Math.floor(Date.now() / 1000);
         const parsed = ev.newValue ? JSON.parse(ev.newValue) : null;
         const until = Math.floor(Number(parsed?.until ?? 0));
         const msg = typeof parsed?.messageId === "string" ? parsed.messageId : undefined;
