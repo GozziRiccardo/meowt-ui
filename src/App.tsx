@@ -2825,6 +2825,7 @@ function suppressMasksFor(seconds: number, types: string[] = []) {
   } else {
     types.forEach((t) => suppressedMaskTypes.add(t));
   }
+  // NEW: if we’re suppressing the MOD mask, clear the “latched once” IDs
   if (touchesModMask) {
     modMaskLatchedIdsRefGlobal?.current.clear();
   }
@@ -3136,12 +3137,10 @@ function ActiveCard() {
     const nowS = Math.floor(Date.now() / 1000);
     if (!id || id === 0n) return false;
 
-    // If we've ever latched this id (until cleared), do nothing.
-    if (modMaskLatchedIdsRef.current.has(id)) {
-      return false;
-    }
+    // If we’ve EVER latched for this ID (until cleared), do nothing
+    if (modMaskLatchedIdsRef.current.has(id)) return false;
 
-    // Never let the visible mask exceed "freeze from now".
+    // Never exceed freeze seconds from *now* (prevents countdown resets)
     const cap = nowS + maskSecsRef.current;
     const until = Math.min(desiredUntil, cap);
 
@@ -3358,7 +3357,7 @@ function ActiveCard() {
     if (modMaskUntilRef.current > 0 && now >= modMaskUntilRef.current) {
       const prevId = modMaskMessageIdRef.current;
       if (prevId && prevId !== 0n) {
-        // Always disarm on timer-based clear as well.
+        // avoid instant re-trigger for the same ID
         disarmModFor(prevId, MOD_RETRIGGER_DEBOUNCE_SECS);
       }
       modMaskLatchedIdsRef.current.clear();
