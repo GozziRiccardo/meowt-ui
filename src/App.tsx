@@ -1437,6 +1437,21 @@ function useGameSnapshot() {
     return Math.floor(Date.now() / 1000);
   }, []);
 
+  // Refs and latches
+  const lastIdRef = React.useRef<bigint>(0n);
+  const exposureEndRef = React.useRef<number>(0);
+  const gloryEndRef = React.useRef<number>(0);
+  const boostEndRef = React.useRef<number>(0);
+  const cooldownEndRef = React.useRef<number>(0);
+  const immEndRef = React.useRef<number>(0);
+  const showUntilRef = React.useRef<number>(0);
+  const idHoldUntilRef = React.useRef<number>(0);
+  const lastStartRef = React.useRef<number>(0);
+  const lastContentKeyRef = React.useRef<string>("");
+  const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
+  const gloryEntryLatchRef = React.useRef<boolean>(false);
+  (globalThis as any).__meowtGloryEntryLatchRef = gloryEntryLatchRef;
+
   // Do not anchor from gloryRemaining while the *current* message is still in exposure,
   // or while our post-guard is active. This prevents early jumps into glory at post time.
   function suppressGloryAnchorNow(): boolean {
@@ -1444,7 +1459,7 @@ function useGameSnapshot() {
     const idMatches = lastIdRef.current === idBig;
     // Exposure is "anchored" once we know exposureEnd for this id
     const exposureAnchoredNow = idMatches && exposureEndRef.current > 0;
-    const gloryPreOkNow = idMatches && gloryPreOkRef.current;
+    const gloryPreOkNow = idMatches && gloryEntryLatchRef.current;
     const chainNowS = computeChainNow();
     const exposureLeftNow = exposureAnchoredNow
       ? Math.max(0, exposureEndRef.current - chainNowS)
@@ -1561,20 +1576,6 @@ function useGameSnapshot() {
       localStorage.setItem(boostKey(id), String(Math.max(0, Math.floor(endEpochSec))));
     } catch {}
   }
-
-  // Refs and latches
-  const lastIdRef = React.useRef<bigint>(0n);
-  const exposureEndRef = React.useRef<number>(0);
-  const gloryEndRef = React.useRef<number>(0);
-  const boostEndRef = React.useRef<number>(0);
-  const cooldownEndRef = React.useRef<number>(0);
-  const immEndRef = React.useRef<number>(0);
-  const showUntilRef = React.useRef<number>(0);
-  const idHoldUntilRef = React.useRef<number>(0);
-  const lastStartRef = React.useRef<number>(0);
-  const lastContentKeyRef = React.useRef<string>("");
-  const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
-  const gloryPreOkRef = React.useRef<boolean>(false);
 
   // Explicit rehydration gate (prevents UI flashing before persisted state loads)
   const [rehydrationComplete, setRehydrationComplete] = React.useState(true);
@@ -1728,7 +1729,7 @@ function useGameSnapshot() {
       immEndRef.current = 0;
       lastStartRef.current = 0;
       lastContentKeyRef.current = "";
-      gloryPreOkRef.current = false;
+      gloryEntryLatchRef.current = false;
 
       if (!booting) {
         showUntilRef.current = Math.max(
@@ -1773,7 +1774,7 @@ function useGameSnapshot() {
     lastStartRef.current = 0;
     lastContentKeyRef.current = "";
     gloryGuardUntilRef.current = 0;
-    gloryPreOkRef.current = false;
+    gloryEntryLatchRef.current = false;
   }, [hasId]);
 
   React.useEffect(() => {
@@ -1800,7 +1801,7 @@ function useGameSnapshot() {
     const predictedImmEnd = startTime && winPostImm ? startTime + winPostImm : 0;
 
     // Reset dynamic windows and seed fresh ends so all devices agree instantly.
-    gloryPreOkRef.current = false;
+    gloryEntryLatchRef.current = false;
     exposureEndRef.current = predictedExposureEnd || 0;
     gloryEndRef.current = predictedGloryEnd || 0;
     boostEndRef.current = 0;
@@ -2005,7 +2006,7 @@ function useGameSnapshot() {
   const cooldownEnd = idMatchesRefs ? cooldownEndRef.current : 0;
   const immEnd = idMatchesRefs ? immEndRef.current : 0;
   const gloryGuardUntil = idMatchesRefs ? gloryGuardUntilRef.current : 0; // seconds
-  const gloryPreOk = idMatchesRefs ? gloryPreOkRef.current : false;
+  const gloryPreOk = idMatchesRefs ? gloryEntryLatchRef.current : false;
 
   const exposureLeft = Math.max(0, exposureEnd - nowSec);
   const immLeft = Math.max(0, immEnd - nowSec);
@@ -2019,7 +2020,7 @@ function useGameSnapshot() {
   React.useEffect(() => {
     if (!hasId || !idMatchesRefs) return;
     if (!exposureAnchored) return;
-    if (gloryPreOkRef.current) return;
+    if (gloryEntryLatchRef.current) return;
 
     const pastExposure = exposureEnd > 0 && nowSec >= exposureEnd;
     const insideGloryWindow =
@@ -2029,7 +2030,7 @@ function useGameSnapshot() {
       (immLeft <= 0);
 
     if (insideGloryWindow) {
-      gloryPreOkRef.current = true;
+      gloryEntryLatchRef.current = true;
     }
   }, [
     hasId,
@@ -2046,7 +2047,7 @@ function useGameSnapshot() {
   React.useEffect(() => {
     if (!hasId || !idMatchesRefs) return;
     if (immLeft > 0 || gloryGuardActive) {
-      if (gloryPreOkRef.current) gloryPreOkRef.current = false;
+      if (gloryEntryLatchRef.current) gloryEntryLatchRef.current = false;
     }
   }, [hasId, idMatchesRefs, immLeft, gloryGuardActive]);
 
@@ -2060,8 +2061,8 @@ function useGameSnapshot() {
       (exposureEndRef.current > 0 ? nowSec >= exposureEndRef.current : true) &&
       (gloryEndRef.current > 0 ? nowSec >= gloryEndRef.current : true);
     const noActive = !hasId || (chainIdle && windowsOver);
-    if (noActive && gloryPreOkRef.current) {
-      gloryPreOkRef.current = false;
+    if (noActive && gloryEntryLatchRef.current) {
+      gloryEntryLatchRef.current = false;
     }
   }, [hasId, remChainBN, gloryRemChainBN, nowSec]);
 
@@ -2070,12 +2071,12 @@ function useGameSnapshot() {
   React.useEffect(() => {
     if (!hasId || !idMatchesRefs) return;
     if (!exposureAnchored) return;
-    if (gloryPreOkRef.current) return;
+    if (gloryEntryLatchRef.current) return;
     if (exposureEnd <= 0) return;
 
     const exposureRemaining = Math.max(0, exposureEnd - nowSec);
     if (exposureRemaining > 0 && exposureRemaining <= PRE_GLORY_GUARD_SECS && !gloryGuardActive) {
-      gloryPreOkRef.current = true;
+      gloryEntryLatchRef.current = true;
     }
   }, [
     hasId,
@@ -2099,9 +2100,9 @@ function useGameSnapshot() {
 
   React.useEffect(() => {
     if (!hasId || !idMatchesRefs) return;
-    if (!gloryPreOkRef.current) return;
+    if (!gloryEntryLatchRef.current) return;
     if (gloryEnd <= 0 || nowSec >= gloryEnd) {
-      gloryPreOkRef.current = false;
+      gloryEntryLatchRef.current = false;
     }
   }, [hasId, idMatchesRefs, gloryEnd, nowSec]);
 
@@ -2997,7 +2998,12 @@ function ActiveCard() {
   const gloryPersistWroteIdRef = React.useRef<bigint>(0n);
   const [gloryMaskLatched, setGloryMaskLatched] = React.useState(false);
   const clearGloryMaskState = React.useCallback(() => {
-    gloryPreOkRef.current = false;
+    const globalLatchRef = (globalThis as any).__meowtGloryEntryLatchRef as
+      | React.MutableRefObject<boolean>
+      | undefined;
+    if (globalLatchRef) {
+      globalLatchRef.current = false;
+    }
     gloryUntilRef.current = 0;
     gloryMaskMessageIdRef.current = 0n;
     gloryPersistWroteEndRef.current = 0;
