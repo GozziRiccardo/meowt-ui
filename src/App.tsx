@@ -3227,10 +3227,12 @@ function ActiveCard() {
       if (!detail || typeof detail.until !== "number") return;
       const normalized = Number.isFinite(detail.until) ? Math.floor(detail.until) : 0;
       const evtId = parseMaskMessageId(detail.messageId ?? undefined);
+      // Use chain time for clamping to stay in sync with sender
+      const chainNow = computeNow();
       if (detail.key === MOD_MASK_KEY) {
         if (normalized > 0) {
-          // clamp to at most freeze seconds from "now"
-          const cap = Math.floor(Date.now() / 1000) + maskSecsRef.current;
+          // clamp to at most freeze seconds from chain "now"
+          const cap = chainNow + maskSecsRef.current;
           const capped = Math.min(normalized, cap);
           modMaskUntilRef.current = capped;
           if (evtId > 0n) {
@@ -3248,8 +3250,8 @@ function ActiveCard() {
         }
       } else if (detail.key === NUKE_MASK_KEY) {
         if (normalized > 0) {
-          // clamp to at most freeze seconds from "now"
-          const cap = Math.floor(Date.now() / 1000) + maskSecsRef.current;
+          // clamp to at most freeze seconds from chain "now"
+          const cap = chainNow + maskSecsRef.current;
           const capped = Math.min(normalized, cap);
           nukeMaskUntilRef.current = capped;
           if (evtId > 0n) {
@@ -3261,8 +3263,8 @@ function ActiveCard() {
         }
       } else if (detail.key === GLORY_MASK_KEY) {
         if (normalized > 0) {
-          // clamp to at most (freeze + latchPad) seconds from "now"
-          const cap = Math.floor(Date.now() / 1000) + gloryMaskSpanRef.current;
+          // clamp to at most (freeze + latchPad) seconds from chain "now"
+          const cap = chainNow + gloryMaskSpanRef.current;
           const capped = Math.min(normalized, cap);
           gloryUntilRef.current = capped;
           if (evtId > 0n) {
@@ -3280,22 +3282,23 @@ function ActiveCard() {
       if (ev.key !== MOD_MASK_KEY && ev.key !== NUKE_MASK_KEY && ev.key !== GLORY_MASK_KEY)
         return;
       try {
-        const nowS = Math.floor(Date.now() / 1000);
+        // Use chain time for clamping to stay in sync across tabs
+        const chainNow = computeNow();
         const parsed = ev.newValue ? JSON.parse(ev.newValue) : null;
         const until = Math.floor(Number(parsed?.until ?? 0));
         const msg = typeof parsed?.messageId === "string" ? parsed.messageId : undefined;
         const id = parseMaskMessageId(msg);
         if (ev.key === MOD_MASK_KEY) {
           modMaskUntilRef.current =
-            until > 0 ? Math.min(until, nowS + maskSecsRef.current) : 0;
+            until > 0 ? Math.min(until, chainNow + maskSecsRef.current) : 0;
           if (id > 0n) modMaskMessageIdRef.current = id;
         } else if (ev.key === NUKE_MASK_KEY) {
           nukeMaskUntilRef.current =
-            until > 0 ? Math.min(until, nowS + maskSecsRef.current) : 0;
+            until > 0 ? Math.min(until, chainNow + maskSecsRef.current) : 0;
           if (id > 0n) nukeMaskMessageIdRef.current = id;
         } else if (ev.key === GLORY_MASK_KEY) {
           gloryUntilRef.current =
-            until > 0 ? Math.min(until, nowS + gloryMaskSpanRef.current) : 0;
+            until > 0 ? Math.min(until, chainNow + gloryMaskSpanRef.current) : 0;
           if (id > 0n) gloryMaskMessageIdRef.current = id;
         }
       } catch {
@@ -3307,7 +3310,7 @@ function ActiveCard() {
       window.removeEventListener(MASK_EVENT, handler as EventListener);
       window.removeEventListener("storage", onStorage);
     };
-  }, []);
+  }, [computeNow]);
   React.useEffect(() => {
     const chainNowS = Number((snap as any)?.nowSec ?? 0);
     if (!Number.isFinite(chainNowS) || chainNowS <= 0) return;
