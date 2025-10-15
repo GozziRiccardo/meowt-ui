@@ -2977,6 +2977,7 @@ function ActiveCard() {
   // --- clocks / windows from snap ---
   const remSec = Number((snap as any)?.rem ?? 0n);
   const glorySec = Number((snap as any)?.gloryRem ?? 0);
+  const nowSecNumber = Number((snap as any)?.nowSec ?? 0);
   const MASK_SECS = Number((snap as any)?.winFreeze ?? 11);
 
   const computeNow = React.useCallback(() => {
@@ -3364,19 +3365,25 @@ function ActiveCard() {
     if (isModDisarmed(latchedModId)) return;
 
     // Use chain time, not local Date.now()
-    const chainNowS = Number((snap as any)?.nowSec ?? 0);
+    const chainNowS = nowSecNumber;
     if (!Number.isFinite(chainNowS) || chainNowS <= 0) return;
 
-    const maskDurationSecs = NUKE_MASK_SECS;
-    const until = chainNowS + maskDurationSecs;
+    const activeForSameId =
+      modMaskMessageIdRef.current === latchedModId &&
+      modMaskUntilRef.current > chainNowS;
 
-    if (until > modMaskUntilRef.current) {
+    if (!activeForSameId) {
+      const maskDurationSecs = NUKE_MASK_SECS;
+      const until = chainNowS + maskDurationSecs;
+
       modMaskUntilRef.current = until;
+      modMaskMessageIdRef.current = latchedModId;
       writeMaskUntil(MOD_MASK_KEY, until, { messageId: latchedModId });
       // Broadcast to other tabs immediately
       broadcastMaskEvent("mod", until, latchedModId);
+    } else {
+      modMaskMessageIdRef.current = latchedModId;
     }
-    modMaskMessageIdRef.current = latchedModId;
 
     let latched = lastActiveMessageRef.current;
     if (hasActive && msgId && msgId !== 0n && currentMessage && msgId === latchedModId) {
@@ -3392,7 +3399,7 @@ function ActiveCard() {
     modFlaggedLive,
     msgId,
     NUKE_MASK_SECS,
-    snap,
+    nowSecNumber,
   ]);
   React.useEffect(() => {
     if (hasActive) setModFrozenMessage(null);
