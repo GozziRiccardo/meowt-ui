@@ -834,6 +834,7 @@ export function FinalizingMask({
   imgUrl?: string;
   message?: string;
 }) {
+  const secs = Math.max(0, Math.floor(secondsLeft));
   React.useEffect(() => {
     const scrollY = window.scrollY;
     const prev = {
@@ -877,7 +878,7 @@ export function FinalizingMask({
         style={{ top: "calc(16px + env(safe-area-inset-top, 0px))" }}
       >
         <div className="px-3 py-1.5 rounded-full text-sm font-semibold bg-black/85 text-white shadow-md">
-          {message} {secondsLeft}s
+          {message} {secs}s
         </div>
       </div>
     </div>,
@@ -1362,6 +1363,9 @@ function useGameSnapshot() {
       refetchInterval: 2500,
     },
   });
+
+  // Live chain signal that glory is truly active
+  const gRemLive = Number(gloryRemChainBN ?? 0n) > 0;
 
   // Live boost/cooldown windows (1s polling, focus re-sync)
   const { data: boostedRemLiveBN } = useReadContract({
@@ -2091,6 +2095,7 @@ function useGameSnapshot() {
   // Only consider glory for the *current* message once exposure end is anchored and passed.
   // This makes “entering glory” equivalent to the exposure countdown reaching zero.
   const inGlory =
+    gRemLive &&
     exposureLeft === 0 &&
     gloryEnd > nowSec &&
     exposureAnchored &&
@@ -2125,7 +2130,7 @@ function useGameSnapshot() {
   let lockLeft = 0;
   if (readyToShowLocks) {
     // Glory takes precedence whenever the current message is in glory.
-    if (inGlory && gloryLeftUi > 0) {
+    if (inGlory && gRemLive && gloryLeftUi > 0) {
       // Enter glory ONLY after exposure for this id is anchored and passed.
       lockKind = "glory";
       lockLeft = gloryLeftUi;
@@ -3559,7 +3564,9 @@ function ActiveCard() {
 
   const showModMask = now < modMaskUntilRef.current;
   const showNukeMask = !showModMask && now < nukeMaskUntilRef.current;
-  const modMaskLeft = showModMask ? modMaskUntilRef.current - now : 0;
+  const modMaskLeft = showModMask
+    ? Math.max(0, Math.floor(modMaskUntilRef.current - now))
+    : 0;
   const nukeMaskLeft = showNukeMask ? nukeMaskUntilRef.current - now : 0;
   React.useEffect(() => {
     if (!showModMask) setModFrozenMessage(null);
