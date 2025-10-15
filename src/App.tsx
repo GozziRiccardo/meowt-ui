@@ -2014,6 +2014,42 @@ function useGameSnapshot() {
   const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
   const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
 
+  // If we refresh while already inside the anchored glory window, relatch the gate
+  // so glory persists through the reload without waiting for the pre-exposure window.
+  React.useEffect(() => {
+    if (!hasId || !idMatchesRefs) return;
+    if (!exposureAnchored) return;
+    if (gloryPreOkRef.current) return;
+
+    const pastExposure = exposureEnd > 0 && nowSec >= exposureEnd;
+    const insideGloryWindow =
+      pastExposure &&
+      gloryEnd > nowSec &&
+      !gloryGuardActive &&
+      (immLeft <= 0);
+
+    if (insideGloryWindow) {
+      gloryPreOkRef.current = true;
+    }
+  }, [
+    hasId,
+    idMatchesRefs,
+    exposureAnchored,
+    exposureEnd,
+    gloryEnd,
+    nowSec,
+    gloryGuardActive,
+    immLeft,
+  ]);
+
+  // While immunity/guard is actually active, we cannot be in glory → keep the gate down.
+  React.useEffect(() => {
+    if (!hasId || !idMatchesRefs) return;
+    if (immLeft > 0 || gloryGuardActive) {
+      if (gloryPreOkRef.current) gloryPreOkRef.current = false;
+    }
+  }, [hasId, idMatchesRefs, immLeft, gloryGuardActive]);
+
   // Disarm pre-glory latch whenever we are idle (no active message).
   React.useEffect(() => {
     const remNow = Number(remChainBN ?? 0n);
@@ -2029,15 +2065,27 @@ function useGameSnapshot() {
     }
   }, [hasId, remChainBN, gloryRemChainBN, nowSec]);
 
+  // Arm glory only in the final window before exposure ends (conservative)
+  // and not while post-immunity guard is active.
   React.useEffect(() => {
     if (!hasId || !idMatchesRefs) return;
     if (!exposureAnchored) return;
     if (gloryPreOkRef.current) return;
     if (exposureEnd <= 0) return;
-    if (Math.max(0, exposureEnd - nowSec) <= PRE_GLORY_GUARD_SECS) {
+
+    const exposureRemaining = Math.max(0, exposureEnd - nowSec);
+    if (exposureRemaining > 0 && exposureRemaining <= PRE_GLORY_GUARD_SECS && !gloryGuardActive) {
       gloryPreOkRef.current = true;
     }
-  }, [hasId, idMatchesRefs, exposureAnchored, exposureEnd, nowSec, PRE_GLORY_GUARD_SECS]);
+  }, [
+    hasId,
+    idMatchesRefs,
+    exposureAnchored,
+    exposureEnd,
+    nowSec,
+    PRE_GLORY_GUARD_SECS,
+    gloryGuardActive,
+  ]);
 
   // Only consider glory for the *current* message once exposure end is anchored and passed.
   // This makes “entering glory” equivalent to the exposure countdown reaching zero.
@@ -2046,6 +2094,7 @@ function useGameSnapshot() {
     gloryEnd > nowSec &&
     exposureAnchored &&
     !gloryGuardActive &&
+    (immLeft <= 0) &&
     gloryPreOk;
 
   React.useEffect(() => {
