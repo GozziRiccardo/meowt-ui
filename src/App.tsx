@@ -1843,6 +1843,21 @@ function useGameSnapshot() {
 
   const idChangeHold = Date.now() < idHoldUntilRef.current;
 
+  const idMatchesRefs = lastIdRef.current === idBig;
+
+  React.useEffect(() => {
+    // Reset gloryPreOk whenever we transition to a new message or during replacement
+    // This prevents it from carrying stale true state through immunity/exposure phases
+    if (!hasId || !idMatchesRefs) {
+      gloryPreOkRef.current = false;
+      return;
+    }
+    // On new ID detected, always reset
+    if (lastIdRef.current !== idBig) {
+      gloryPreOkRef.current = false;
+    }
+  }, [hasId, idMatchesRefs, idBig]);
+
   // End/exposure window
   const endTsNum = Number(endTsBN ?? 0n);
   React.useEffect(() => {
@@ -1959,6 +1974,9 @@ function useGameSnapshot() {
   React.useEffect(() => {
     if (!hasId || !idBig) return;
     if (startTime && winPostImm) {
+      if (gloryPreOkRef.current) {
+        gloryPreOkRef.current = false;
+      }
       const e = startTime + winPostImm;
       if (e > 0) {
         immEndRef.current = Math.max(immEndRef.current, e);
@@ -1998,7 +2016,6 @@ function useGameSnapshot() {
   }, [endTsNum, startTime, B0secs, winGlory, gloryRemChainBN]);
 
   // Derived clocks (guard all ref-based ends to the current id to avoid stale carryover)
-  const idMatchesRefs = lastIdRef.current === idBig;
   const exposureEnd = idMatchesRefs ? exposureEndRef.current : 0;
   const gloryEnd = idMatchesRefs ? gloryEndRef.current : 0;
   const boostEnd = idMatchesRefs ? boostEndRef.current : 0;
@@ -2013,6 +2030,80 @@ function useGameSnapshot() {
   const cooldownLeft = Math.max(0, cooldownEnd - nowSec);
   const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
   const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
+
+  const showModMask = React.useMemo(() => {
+    if (!hasId || !idMatchesRefs || !idBig) return false;
+    if (typeof window === "undefined") return false;
+    try {
+      const state = readMaskState(MOD_MASK_KEY);
+      const until = Number(state?.until ?? 0);
+      const maskId = parseMaskMessageId(state?.messageId);
+      if (!Number.isFinite(until) || until <= 0) return false;
+      if (!maskId || maskId === 0n || maskId !== idBig) return false;
+      return nowSec < until;
+    } catch {
+      return false;
+    }
+  }, [hasId, idMatchesRefs, idBig, nowSec]);
+
+  const showNukeMask = React.useMemo(() => {
+    if (!hasId || !idMatchesRefs || !idBig) return false;
+    if (typeof window === "undefined") return false;
+    try {
+      const state = readMaskState(NUKE_MASK_KEY);
+      const until = Number(state?.until ?? 0);
+      const maskId = parseMaskMessageId(state?.messageId);
+      if (!Number.isFinite(until) || until <= 0) return false;
+      if (!maskId || maskId === 0n || maskId !== idBig) return false;
+      return nowSec < until;
+    } catch {
+      return false;
+    }
+  }, [hasId, idMatchesRefs, idBig, nowSec]);
+
+  const showGloryMask = React.useMemo(() => {
+    if (!hasId || !idMatchesRefs || !idBig) return false;
+    if (typeof window === "undefined") return false;
+    try {
+      const state = readMaskState(GLORY_MASK_KEY);
+      const until = Number(state?.until ?? 0);
+      const maskId = parseMaskMessageId(state?.messageId);
+      if (!Number.isFinite(until) || until <= 0) return false;
+      if (!maskId || maskId === 0n || maskId !== idBig) return false;
+      return nowSec < until;
+    } catch {
+      return false;
+    }
+  }, [hasId, idMatchesRefs, idBig, nowSec]);
+
+  React.useEffect(() => {
+    if (!hasId || !idMatchesRefs) return;
+    if (gloryPreOkRef.current) return; // Already set, don't change
+    if (!exposureAnchored) return; // Must be anchored first
+    if (exposureEnd <= 0) return; // No exposure end yet
+
+    const exposureRemaining = Math.max(0, exposureEnd - nowSec);
+
+    // Only allow setting gloryPreOk in the FINAL window before exposure ends
+    // and NEVER while any mask is showing
+    const inFinalWindow =
+      exposureRemaining > 0 && exposureRemaining <= PRE_GLORY_GUARD_SECS;
+    const noMasksActive = !showModMask && !showNukeMask && !showGloryMask;
+
+    if (inFinalWindow && noMasksActive) {
+      gloryPreOkRef.current = true;
+    }
+  }, [
+    hasId,
+    idMatchesRefs,
+    exposureAnchored,
+    exposureEnd,
+    nowSec,
+    PRE_GLORY_GUARD_SECS,
+    showModMask,
+    showNukeMask,
+    showGloryMask,
+  ]);
 
   // Disarm pre-glory latch whenever we are idle (no active message).
   React.useEffect(() => {
@@ -2031,13 +2122,12 @@ function useGameSnapshot() {
 
   React.useEffect(() => {
     if (!hasId || !idMatchesRefs) return;
-    if (!exposureAnchored) return;
-    if (gloryPreOkRef.current) return;
-    if (exposureEnd <= 0) return;
-    if (Math.max(0, exposureEnd - nowSec) <= PRE_GLORY_GUARD_SECS) {
-      gloryPreOkRef.current = true;
+    if (!gloryPreOkRef.current) return;
+    // Clear the flag once glory ends OR a mask appears
+    if (gloryEnd <= 0 || nowSec >= gloryEnd || showModMask || showNukeMask) {
+      gloryPreOkRef.current = false;
     }
-  }, [hasId, idMatchesRefs, exposureAnchored, exposureEnd, nowSec, PRE_GLORY_GUARD_SECS]);
+  }, [hasId, idMatchesRefs, gloryEnd, nowSec, showModMask, showNukeMask]);
 
   // Only consider glory for the *current* message once exposure end is anchored and passed.
   // This makes “entering glory” equivalent to the exposure countdown reaching zero.
@@ -2046,15 +2136,8 @@ function useGameSnapshot() {
     gloryEnd > nowSec &&
     exposureAnchored &&
     !gloryGuardActive &&
-    gloryPreOk;
-
-  React.useEffect(() => {
-    if (!hasId || !idMatchesRefs) return;
-    if (!gloryPreOkRef.current) return;
-    if (gloryEnd <= 0 || nowSec >= gloryEnd) {
-      gloryPreOkRef.current = false;
-    }
-  }, [hasId, idMatchesRefs, gloryEnd, nowSec]);
+    gloryPreOk &&
+    !immLeft;
 
   // Anchored glory time left for the UI (no fallback to global gloryRemaining).
   const gloryLeftUi =
@@ -3486,7 +3569,15 @@ function ActiveCard() {
       writeMaskUntil(MOD_MASK_KEY, 0);
       setModFrozenMessage(null);
     }
-  }, [hasActive, latchedModId, modFlaggedLive, msgId]);
+  }, [
+    hasActive,
+    currentMessage,
+    latchedModId,
+    modFlaggedLive,
+    msgId,
+    NUKE_MASK_SECS,
+    snap,
+  ]);
 
   React.useEffect(() => {
     const wasActive = hadActiveRef.current;
@@ -3517,6 +3608,7 @@ function ActiveCard() {
   const nukeMaskLeft = showNukeMask
     ? Math.max(0, nukeMaskUntilRef.current - Number((snap as any)?.nowSec ?? 0))
     : 0;
+
   React.useEffect(() => {
     if (!showModMask) setModFrozenMessage(null);
   }, [showModMask]);
