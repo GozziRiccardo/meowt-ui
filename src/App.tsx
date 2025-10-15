@@ -1465,8 +1465,10 @@ function useGameSnapshot() {
       ? Math.max(0, exposureEndRef.current - chainNowS)
       : 0;
     const guardActiveNow = chainNowS < gloryGuardUntilRef.current; // seconds vs seconds
-    // NEW: do not anchor from gloryRemaining until we *know* exposureEnd for this id,
-    // and only after exposure has actually reached 0.
+
+    // NEW: never anchor from gloryRemaining before predicted immunity end
+    if (predictedImmEnd > 0 && chainNowS < predictedImmEnd) return true;
+
     if (!exposureAnchoredNow) return true;
     if (!gloryPreOkNow) return true;
     return guardActiveNow || exposureLeftNow > 0;
@@ -2011,6 +2013,10 @@ function useGameSnapshot() {
 
   const exposureLeft = Math.max(0, exposureEnd - nowSec);
   const immLeft = Math.max(0, immEnd - nowSec);
+  // Predict immunity end from message metadata, even before immEndRef is hydrated.
+  // This lets us block glory arming/anchoring on the *first* render after a post.
+  const predictedImmEnd =
+    (startTime && winPostImm ? startTime + winPostImm : 0) || 0;
   const boostLeft = Math.max(0, boostEnd - nowSec);
   const cooldownLeft = Math.max(0, cooldownEnd - nowSec);
   const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
@@ -2024,11 +2030,13 @@ function useGameSnapshot() {
     if (gloryEntryLatchRef.current) return;
 
     const pastExposure = exposureEnd > 0 && nowSec >= exposureEnd;
+    const predictedImmOver = predictedImmEnd > 0 ? nowSec >= predictedImmEnd : immLeft <= 0;
+
     const insideGloryWindow =
       pastExposure &&
       gloryEnd > nowSec &&
       !gloryGuardActive &&
-      (immLeft <= 0);
+      predictedImmOver;
 
     if (insideGloryWindow) {
       gloryEntryLatchRef.current = true;
@@ -2042,6 +2050,7 @@ function useGameSnapshot() {
     nowSec,
     gloryGuardActive,
     immLeft,
+    predictedImmEnd,
   ]);
 
   // While immunity/guard is actually active, we cannot be in glory → keep the gate down.
@@ -2075,7 +2084,10 @@ function useGameSnapshot() {
     if (gloryEntryLatchRef.current) return;
     if (exposureEnd <= 0) return;
 
-    if (immLeft > 0 || gloryGuardActive) return;
+    // Block arming until predicted immunity is definitely over,
+    // even if immEndRef hasn't hydrated yet.
+    const predictedImmOver = predictedImmEnd > 0 ? nowSec >= predictedImmEnd : immLeft <= 0;
+    if (!predictedImmOver || gloryGuardActive) return;
 
     const exposureRemaining = Math.max(0, exposureEnd - nowSec);
     if (exposureRemaining > 0 && exposureRemaining <= PRE_GLORY_GUARD_SECS) {
@@ -2090,6 +2102,7 @@ function useGameSnapshot() {
     PRE_GLORY_GUARD_SECS,
     gloryGuardActive,
     immLeft,
+    predictedImmEnd,
   ]);
 
   // Only consider glory for the *current* message once exposure end is anchored and passed.
@@ -2941,6 +2954,16 @@ function ActiveCard() {
     return Math.floor(Date.now() / 1000);
   }, [snap]);
   const [now, setNow] = React.useState(() => computeNow());
+
+  function useMonotonicDownByKey(key: string, value: number) {
+    const ref = React.useRef(new Map<string, number>());
+    const next = Math.max(0, Math.floor(value || 0));
+    const prev = ref.current.get(key);
+    const out = typeof prev === "number" ? Math.min(prev, next) : next;
+    ref.current.set(key, out);
+    return out;
+  }
+
   const rehydrateMasksOnResumeDeps = [glorySec, MASK_SECS]; // only for eslint happiness
   // For cross-tab clamping: visible glory mask should never exceed freeze + pad
   const GLORY_MASK_MAX_SPAN = Math.max(0, MASK_SECS + GLORY_MASK_LATCH_PAD);
@@ -3121,6 +3144,55 @@ function ActiveCard() {
   const nukeMaskMessageIdRef = React.useRef<bigint>(0n);
   const modMaskUntilRef = React.useRef(0);
   const modMaskMessageIdRef = React.useRef<bigint>(0n);
+  // Write-once latches to avoid sliding-window extensions for MOD/NUKE masks
+  const modFirstUntilRef = React.useRef<{ id: bigint; until: number }>({ id: 0n, until: 0 });
+  const nukeFirstUntilRef = React.useRef<{ id: bigint; until: number }>({ id: 0n, until: 0 });
+
+  function setModMaskOnce(id: bigint, desiredUntil: number) {
+    if (!id || id === 0n || !Number.isFinite(desiredUntil) || desiredUntil <= 0) return;
+
+    // Initialize the first-until for this id (single write)
+    if (modFirstUntilRef.current.id !== id) {
+      modFirstUntilRef.current = { id, until: desiredUntil };
+    }
+    const fixedUntil = Math.min(modFirstUntilRef.current.until || desiredUntil, desiredUntil);
+
+    // Never increase after first set
+    if (modMaskUntilRef.current === 0) {
+      modMaskUntilRef.current = fixedUntil;
+      writeMaskUntil(MOD_MASK_KEY, fixedUntil, { messageId: id });
+    } else {
+      const next = Math.min(modMaskUntilRef.current, fixedUntil);
+      if (next !== modMaskUntilRef.current) {
+        modMaskUntilRef.current = next;
+        writeMaskUntil(MOD_MASK_KEY, next, { messageId: id });
+      } else {
+        modMaskUntilRef.current = next;
+      }
+    }
+  }
+
+  function setNukeMaskOnce(id: bigint, desiredUntil: number) {
+    if (!id || id === 0n || !Number.isFinite(desiredUntil) || desiredUntil <= 0) return;
+
+    if (nukeFirstUntilRef.current.id !== id) {
+      nukeFirstUntilRef.current = { id, until: desiredUntil };
+    }
+    const fixedUntil = Math.min(nukeFirstUntilRef.current.until || desiredUntil, desiredUntil);
+
+    if (nukeMaskUntilRef.current === 0) {
+      nukeMaskUntilRef.current = fixedUntil;
+      writeMaskUntil(NUKE_MASK_KEY, fixedUntil, { messageId: id });
+    } else {
+      const next = Math.min(nukeMaskUntilRef.current, fixedUntil);
+      if (next !== nukeMaskUntilRef.current) {
+        nukeMaskUntilRef.current = next;
+        writeMaskUntil(NUKE_MASK_KEY, next, { messageId: id });
+      } else {
+        nukeMaskUntilRef.current = next;
+      }
+    }
+  }
   React.useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") return;
     const rehydrate = () => {
@@ -3213,7 +3285,10 @@ function ActiveCard() {
           // clamp to at most freeze seconds from "now"
           const cap = Math.floor(Date.now() / 1000) + maskSecsRef.current;
           const capped = Math.min(normalized, cap);
-          modMaskUntilRef.current = capped;
+          modMaskUntilRef.current =
+            modMaskUntilRef.current > 0
+              ? Math.min(modMaskUntilRef.current, capped)
+              : capped;
           if (evtId > 0n) {
             modMaskMessageIdRef.current = evtId;
           }
@@ -3224,6 +3299,7 @@ function ActiveCard() {
             disarmModFor(prevId, MOD_RETRIGGER_DEBOUNCE_SECS);
           }
           modMaskMessageIdRef.current = 0n;
+          modFirstUntilRef.current = { id: 0n, until: 0 };
           setModFrozenMessage(null);
           modMaskUntilRef.current = 0;
         }
@@ -3232,12 +3308,16 @@ function ActiveCard() {
           // clamp to at most freeze seconds from "now"
           const cap = Math.floor(Date.now() / 1000) + maskSecsRef.current;
           const capped = Math.min(normalized, cap);
-          nukeMaskUntilRef.current = capped;
+          nukeMaskUntilRef.current =
+            nukeMaskUntilRef.current > 0
+              ? Math.min(nukeMaskUntilRef.current, capped)
+              : capped;
           if (evtId > 0n) {
             nukeMaskMessageIdRef.current = evtId;
           }
         } else {
           nukeMaskMessageIdRef.current = 0n;
+          nukeFirstUntilRef.current = { id: 0n, until: 0 };
           nukeMaskUntilRef.current = 0;
         }
       } else if (detail.key === GLORY_MASK_KEY) {
@@ -3268,12 +3348,26 @@ function ActiveCard() {
         const id = parseMaskMessageId(msg);
         if (ev.key === MOD_MASK_KEY) {
           modMaskUntilRef.current =
-            until > 0 ? Math.min(until, nowS + maskSecsRef.current) : 0;
+            until > 0
+              ? modMaskUntilRef.current > 0
+                ? Math.min(modMaskUntilRef.current, Math.min(until, nowS + maskSecsRef.current))
+                : Math.min(until, nowS + maskSecsRef.current)
+              : 0;
           if (id > 0n) modMaskMessageIdRef.current = id;
+          if (until <= 0) {
+            modFirstUntilRef.current = { id: 0n, until: 0 };
+          }
         } else if (ev.key === NUKE_MASK_KEY) {
           nukeMaskUntilRef.current =
-            until > 0 ? Math.min(until, nowS + maskSecsRef.current) : 0;
+            until > 0
+              ? nukeMaskUntilRef.current > 0
+                ? Math.min(nukeMaskUntilRef.current, Math.min(until, nowS + maskSecsRef.current))
+                : Math.min(until, nowS + maskSecsRef.current)
+              : 0;
           if (id > 0n) nukeMaskMessageIdRef.current = id;
+          if (until <= 0) {
+            nukeFirstUntilRef.current = { id: 0n, until: 0 };
+          }
         } else if (ev.key === GLORY_MASK_KEY) {
           gloryUntilRef.current =
             until > 0 ? Math.min(until, nowS + gloryMaskSpanRef.current) : 0;
@@ -3298,15 +3392,23 @@ function ActiveCard() {
       }
       modMaskUntilRef.current = 0;
       modMaskMessageIdRef.current = 0n;
+      modFirstUntilRef.current = { id: 0n, until: 0 };
       writeMaskUntil(MOD_MASK_KEY, 0);
       clearGloryMaskState();
     }
     if (nukeMaskUntilRef.current > 0 && now >= nukeMaskUntilRef.current) {
       nukeMaskUntilRef.current = 0;
       nukeMaskMessageIdRef.current = 0n;
+      nukeFirstUntilRef.current = { id: 0n, until: 0 };
       writeMaskUntil(NUKE_MASK_KEY, 0);
     }
   }, [now, hasActive, clearGloryMaskState]);
+
+  React.useEffect(() => {
+    // message switched -> clear mod/nuke first-until for safety
+    modFirstUntilRef.current = { id: 0n, until: 0 };
+    nukeFirstUntilRef.current = { id: 0n, until: 0 };
+  }, [msgId]);
 
   React.useEffect(() => {
     isActiveRef.current = hasActive;
@@ -3326,10 +3428,7 @@ function ActiveCard() {
     if (isModDisarmed(latchedModId)) return;
 
     const until = Math.floor(Date.now() / 1000) + NUKE_MASK_SECS;
-    if (until > modMaskUntilRef.current) {
-      modMaskUntilRef.current = until;
-      writeMaskUntil(MOD_MASK_KEY, until, { messageId: latchedModId });
-    }
+    setModMaskOnce(latchedModId, until);
     modMaskMessageIdRef.current = latchedModId;
 
     let latched = lastActiveMessageRef.current;
@@ -3405,11 +3504,8 @@ function ActiveCard() {
       const untilBase = nowS + NUKE_MASK_SECS;
       if (flagged) {
         // never extend beyond freeze seconds from *now*
-        const capped = Math.min(untilBase, nowS + MASK_SECS);
-        if (capped > modMaskUntilRef.current) {
-          modMaskUntilRef.current = capped;
-          writeMaskUntil(MOD_MASK_KEY, capped, { messageId: msgId });
-        }
+        const capped = Math.min(untilBase, Math.floor(Date.now() / 1000) + MASK_SECS);
+        setModMaskOnce(msgId, capped);
         if (msgId && msgId !== 0n) {
           modMaskMessageIdRef.current = msgId;
         }
@@ -3421,12 +3517,9 @@ function ActiveCard() {
         setModFrozenMessage({ id: latched.id, message: { ...latched.message } });
         clearGloryMaskState();
       } else {
-        const capped = Math.min(untilBase, nowS + MASK_SECS);
-        if (capped > nukeMaskUntilRef.current) {
-          nukeMaskUntilRef.current = capped;
-          nukeMaskMessageIdRef.current = msgId ?? 0n;
-          writeMaskUntil(NUKE_MASK_KEY, capped, { messageId: msgId });
-        }
+        const capped = Math.min(untilBase, Math.floor(Date.now() / 1000) + MASK_SECS);
+        setNukeMaskOnce(msgId, capped);
+        nukeMaskMessageIdRef.current = msgId ?? 0n;
       }
     })();
 
@@ -3483,10 +3576,7 @@ function ActiveCard() {
         if (masksSuppressed(MOD_MASK_KEY)) return;
         // never extend beyond freeze seconds from *now*
         const capped = Math.min(untilBase, nowS + MASK_SECS);
-        if (capped > modMaskUntilRef.current) {
-          modMaskUntilRef.current = capped;
-          writeMaskUntil(MOD_MASK_KEY, capped, { messageId: idToCheck });
-        }
+        setModMaskOnce(idToCheck, capped);
         if (idToCheck && idToCheck !== 0n) {
           modMaskMessageIdRef.current = idToCheck;
         }
@@ -3508,11 +3598,8 @@ function ActiveCard() {
       if (masksSuppressed(NUKE_MASK_KEY)) return;
       // never extend beyond freeze seconds from *now*
       const capped = Math.min(untilBase, nowS + MASK_SECS);
-      if (capped > nukeMaskUntilRef.current) {
-        nukeMaskUntilRef.current = capped;
-        nukeMaskMessageIdRef.current = idToCheck ?? 0n;
-        writeMaskUntil(NUKE_MASK_KEY, capped, { messageId: idToCheck });
-      }
+      setNukeMaskOnce(idToCheck, capped);
+      nukeMaskMessageIdRef.current = idToCheck ?? 0n;
     } catch {
       /* ignore */
     }
@@ -3526,6 +3613,7 @@ function ActiveCard() {
     if (!nuked && nukeMaskMessageIdRef.current && nukeMaskMessageIdRef.current !== msgId) {
       nukeMaskUntilRef.current = 0;
       nukeMaskMessageIdRef.current = 0n;
+      nukeFirstUntilRef.current = { id: 0n, until: 0 };
       writeMaskUntil(NUKE_MASK_KEY, 0);
     }
   }, [hasActive, currentMessage, msgId]);
@@ -3540,6 +3628,7 @@ function ActiveCard() {
     if (modMaskMessageIdRef.current && modMaskMessageIdRef.current !== msgId) {
       modMaskUntilRef.current = 0;
       modMaskMessageIdRef.current = 0n;
+      modFirstUntilRef.current = { id: 0n, until: 0 };
       writeMaskUntil(MOD_MASK_KEY, 0);
       setModFrozenMessage(null);
       clearGloryMaskState();
@@ -3573,6 +3662,13 @@ function ActiveCard() {
   const showNukeMask = !showModMask && now < nukeMaskUntilRef.current;
   const modMaskLeft = showModMask ? modMaskUntilRef.current - now : 0;
   const nukeMaskLeft = showNukeMask ? nukeMaskUntilRef.current - now : 0;
+  const modKey = `${MOD_MASK_KEY}:${String(modMaskMessageIdRef.current || 0n)}`;
+  const nukeKey = `${NUKE_MASK_KEY}:${String(nukeMaskMessageIdRef.current || 0n)}`;
+  const gloryKey = `${GLORY_MASK_KEY}:${String(gloryMaskMessageIdRef.current || 0n)}`;
+
+  const modMaskLeftMono = useMonotonicDownByKey(modKey, modMaskLeft);
+  const nukeMaskLeftMono = useMonotonicDownByKey(nukeKey, nukeMaskLeft);
+  const gloryMaskLeftMono = useMonotonicDownByKey(gloryKey, gloryMaskLeft);
   React.useEffect(() => {
     if (!showModMask) setModFrozenMessage(null);
   }, [showModMask]);
@@ -3828,20 +3924,20 @@ function ActiveCard() {
       {/* overlays */}
       {showModMask && rehydrated && (
         <FinalizingMask
-          secondsLeft={modMaskLeft}
+          secondsLeft={modMaskLeftMono}
           imgUrl="/overlays/moderated.png"
           message="The message has been canceled for violation of our policies"
         />
       )}
       {!showModMask && showNukeMask && rehydrated && (
         <FinalizingMask
-          secondsLeft={nukeMaskLeft}
+          secondsLeft={nukeMaskLeftMono}
           imgUrl="/overlays/nuked.png"
           message="Too many dislikes! The message has been nuked"
         />
       )}
       {!showModMask && !showNukeMask && showGloryMask && rehydrated && (
-        <FinalizingMask secondsLeft={gloryMaskLeft} imgUrl="/overlays/finalizing.png" />
+        <FinalizingMask secondsLeft={gloryMaskLeftMono} imgUrl="/overlays/finalizing.png" />
       )}
 
       {snap.loading ? (
