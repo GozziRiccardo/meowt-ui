@@ -2030,6 +2030,12 @@ function useGameSnapshot() {
   const cooldownLeft = Math.max(0, cooldownEnd - nowSec);
   const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
   const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
+  const definitelyInGlory =
+    exposureAnchored &&
+    exposureLeft === 0 &&
+    gloryEnd > nowSec &&
+    !gloryGuardActive &&
+    immLeft === 0;
 
   const showModMask = React.useMemo(() => {
     if (!hasId || !idMatchesRefs || !idBig) return false;
@@ -2105,6 +2111,21 @@ function useGameSnapshot() {
     showGloryMask,
   ]);
 
+  React.useEffect(() => {
+    if (!hasId || !idMatchesRefs) return;
+    if (gloryPreOkRef.current) return;
+    if (!definitelyInGlory) return;
+    if (showModMask || showNukeMask || showGloryMask) return;
+    gloryPreOkRef.current = true;
+  }, [
+    hasId,
+    idMatchesRefs,
+    definitelyInGlory,
+    showModMask,
+    showNukeMask,
+    showGloryMask,
+  ]);
+
   // Disarm pre-glory latch whenever we are idle (no active message).
   React.useEffect(() => {
     const remNow = Number(remChainBN ?? 0n);
@@ -2131,13 +2152,7 @@ function useGameSnapshot() {
 
   // Only consider glory for the *current* message once exposure end is anchored and passed.
   // This makes “entering glory” equivalent to the exposure countdown reaching zero.
-  const inGlory =
-    exposureLeft === 0 &&
-    gloryEnd > nowSec &&
-    exposureAnchored &&
-    !gloryGuardActive &&
-    gloryPreOk &&
-    !immLeft;
+  const inGlory = definitelyInGlory && gloryPreOk;
 
   // Anchored glory time left for the UI (no fallback to global gloryRemaining).
   const gloryLeftUi =
@@ -3227,10 +3242,12 @@ function ActiveCard() {
       if (!detail || typeof detail.until !== "number") return;
       const normalized = Number.isFinite(detail.until) ? Math.floor(detail.until) : 0;
       const evtId = parseMaskMessageId(detail.messageId ?? undefined);
+      // Use chain time for clamping to stay in sync with sender
+      const chainNow = computeNow();
       if (detail.key === MOD_MASK_KEY) {
         if (normalized > 0) {
-          // clamp to at most freeze seconds from "now"
-          const cap = Math.floor(Date.now() / 1000) + maskSecsRef.current;
+          // clamp to at most freeze seconds from chain "now"
+          const cap = chainNow + maskSecsRef.current;
           const capped = Math.min(normalized, cap);
           modMaskUntilRef.current = capped;
           if (evtId > 0n) {
@@ -3248,8 +3265,8 @@ function ActiveCard() {
         }
       } else if (detail.key === NUKE_MASK_KEY) {
         if (normalized > 0) {
-          // clamp to at most freeze seconds from "now"
-          const cap = Math.floor(Date.now() / 1000) + maskSecsRef.current;
+          // clamp to at most freeze seconds from chain "now"
+          const cap = chainNow + maskSecsRef.current;
           const capped = Math.min(normalized, cap);
           nukeMaskUntilRef.current = capped;
           if (evtId > 0n) {
@@ -3261,8 +3278,8 @@ function ActiveCard() {
         }
       } else if (detail.key === GLORY_MASK_KEY) {
         if (normalized > 0) {
-          // clamp to at most (freeze + latchPad) seconds from "now"
-          const cap = Math.floor(Date.now() / 1000) + gloryMaskSpanRef.current;
+          // clamp to at most (freeze + latchPad) seconds from chain "now"
+          const cap = chainNow + gloryMaskSpanRef.current;
           const capped = Math.min(normalized, cap);
           gloryUntilRef.current = capped;
           if (evtId > 0n) {
@@ -3280,22 +3297,23 @@ function ActiveCard() {
       if (ev.key !== MOD_MASK_KEY && ev.key !== NUKE_MASK_KEY && ev.key !== GLORY_MASK_KEY)
         return;
       try {
-        const nowS = Math.floor(Date.now() / 1000);
+        // Use chain time for clamping to stay in sync across tabs
+        const chainNow = computeNow();
         const parsed = ev.newValue ? JSON.parse(ev.newValue) : null;
         const until = Math.floor(Number(parsed?.until ?? 0));
         const msg = typeof parsed?.messageId === "string" ? parsed.messageId : undefined;
         const id = parseMaskMessageId(msg);
         if (ev.key === MOD_MASK_KEY) {
           modMaskUntilRef.current =
-            until > 0 ? Math.min(until, nowS + maskSecsRef.current) : 0;
+            until > 0 ? Math.min(until, chainNow + maskSecsRef.current) : 0;
           if (id > 0n) modMaskMessageIdRef.current = id;
         } else if (ev.key === NUKE_MASK_KEY) {
           nukeMaskUntilRef.current =
-            until > 0 ? Math.min(until, nowS + maskSecsRef.current) : 0;
+            until > 0 ? Math.min(until, chainNow + maskSecsRef.current) : 0;
           if (id > 0n) nukeMaskMessageIdRef.current = id;
         } else if (ev.key === GLORY_MASK_KEY) {
           gloryUntilRef.current =
-            until > 0 ? Math.min(until, nowS + gloryMaskSpanRef.current) : 0;
+            until > 0 ? Math.min(until, chainNow + gloryMaskSpanRef.current) : 0;
           if (id > 0n) gloryMaskMessageIdRef.current = id;
         }
       } catch {
@@ -3307,7 +3325,7 @@ function ActiveCard() {
       window.removeEventListener(MASK_EVENT, handler as EventListener);
       window.removeEventListener("storage", onStorage);
     };
-  }, []);
+  }, [computeNow]);
   React.useEffect(() => {
     const chainNowS = Number((snap as any)?.nowSec ?? 0);
     if (!Number.isFinite(chainNowS) || chainNowS <= 0) return;
