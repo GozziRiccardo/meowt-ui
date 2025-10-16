@@ -1176,10 +1176,14 @@ function useGameSnapshot() {
   const ID_CHANGE_HOLD_MS = 700;
   // Give more time for the posting tab to seed/persist windows & anchors
   const OPTIMISTIC_SHOW_MS = 6000;
-  const ID_PENDING_MAX_HOLD_MS = 1800;
+  // Give a bit more time before letting transient read states flip layout
+  const ID_PENDING_MAX_HOLD_MS = 4500;
   const SHOW_CUSHION = 1;
   const PRE_GLORY_GUARD_SECS = 3;
   const { quiet } = useQuiet();
+  // Keep the correct layout "stuck" right after a commit (post/replace).
+  const STICK_AFTER_COMMIT_SECS = 8; // pin the correct layout briefly after a new message appears
+  const CLICK_GRACE_STICK_SECS = 6; // extend stick briefly when user interacts during early window
 
   // Detect BroadcastChannel support (gate leader mode)
   const bcSupported =
@@ -1476,6 +1480,26 @@ function useGameSnapshot() {
   const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
   const gloryEntryLatchRef = React.useRef<boolean>(false);
   (globalThis as any).__meowtGloryEntryLatchRef = gloryEntryLatchRef;
+  // --- Commit "stick" so UI can't regress during early seconds ---
+  const commitStickUntilRef = React.useRef<number>(0);
+  const commitStickIdRef = React.useRef<bigint>(0n);
+  const armCommitStick = React.useCallback((id: bigint, secs: number) => {
+    if (!id || id === 0n || !Number.isFinite(secs) || secs <= 0) return;
+    const nowS = Math.floor(Date.now() / 1000);
+    commitStickIdRef.current = id;
+    commitStickUntilRef.current = Math.max(
+      commitStickUntilRef.current,
+      nowS + Math.floor(secs),
+    );
+  }, []);
+  const extendCommitStick = React.useCallback((secs: number) => {
+    if (!Number.isFinite(secs) || secs <= 0) return;
+    const nowS = Math.floor(Date.now() / 1000);
+    commitStickUntilRef.current = Math.max(
+      commitStickUntilRef.current,
+      nowS + Math.floor(secs),
+    );
+  }, []);
 
   // Lets the posting tab force "show" briefly even if activeMessageId lags
   function kickLocalShow(seconds = 8) {
@@ -1484,6 +1508,7 @@ function useGameSnapshot() {
       localShowOverrideUntilRef.current,
       nowS + Math.max(1, seconds),
     );
+    extendCommitStick(CLICK_GRACE_STICK_SECS);
   }
 
   // Do not anchor from gloryRemaining while the *current* message is still in exposure,
@@ -1788,8 +1813,17 @@ function useGameSnapshot() {
       // For a few seconds, the author tab is authoritative
       armCommitLatch(8);
       nudgeQueries(qc, [0, 200, 800]);
+      // Pin the layout immediately after a commit so it can't regress
+      armCommitStick(snapId, STICK_AFTER_COMMIT_SECS);
     },
-    [computeChainNow, idBig, qc, broadcastAnchor, armCommitLatch]
+    [
+      computeChainNow,
+      idBig,
+      qc,
+      broadcastAnchor,
+      armCommitLatch,
+      armCommitStick,
+    ]
   );
 
   const broadcastCommit = React.useCallback(
@@ -2674,6 +2708,14 @@ function useGameSnapshot() {
   const liveProofNow =
     Number(remChainBN ?? 0n) > 0 || Number(gloryRemChainBN ?? 0n) > 0;
   const localOverrideActive = nowSec < localShowOverrideUntilRef.current;
+  // Local stick is active only for the current (or last known) id
+  const stickOkId =
+    (idBig && idBig !== 0n && commitStickIdRef.current === idBig) ||
+    (!idBig &&
+      lastIdRef.current &&
+      lastIdRef.current === commitStickIdRef.current);
+  const stickActive =
+    stickOkId && Math.floor(Date.now() / 1000) < commitStickUntilRef.current;
   // If we have live proof, allow showing even before batched `raw` settles.
   const baseShow =
     (hasId || localOverrideActive) &&
@@ -2686,8 +2728,10 @@ function useGameSnapshot() {
   const optimisticHoldActive =
     (hasId || localOverrideActive) && nowSec < untilShow + SHOW_CUSHION;
   const rawReadyEnough =
-    optimisticHoldActive || Boolean(raw) || liveProofNow || commitLatchActive();
-  const effectiveShow =
+    optimisticHoldActive || stickActive || commitLatchActive()
+      ? true
+      : Boolean(raw) || liveProofNow;
+  const effectiveShowBase =
     baseShow &&
     !definitelyOver &&
     (!booting ? true : bootConfirmed) &&
@@ -2696,6 +2740,7 @@ function useGameSnapshot() {
     !waitingForId &&
     rawReadyEnough &&
     readyToShowLocks;
+  const effectiveShow = effectiveShowBase || stickActive;
 
   // Clear optimistic show once resolved
   React.useEffect(() => {
@@ -2730,7 +2775,7 @@ function useGameSnapshot() {
 
   // If we have NO active message, never report loading → prevents “stuck waiting”
   // On a hard refresh, hold the UI in "Loading…" until we *know* whether an ID exists.
-  const loadingState = (!idKnown || refreshGate)
+  let loadingState = (!idKnown || refreshGate)
     ? true
     : (hasId
         ? Boolean(
@@ -2740,6 +2785,8 @@ function useGameSnapshot() {
             (!commitLatchActive() && (stillFetchingActive || !rehydrationComplete))
           )
         : false);
+  // Never show the loading overlay while the stick is active
+  if (stickActive) loadingState = false;
 
   return {
     id: idBig,
@@ -2767,6 +2814,7 @@ function useGameSnapshot() {
     broadcastCommit,
     persistCommitForFallback,
     kickLocalShow,
+    extendCommitStick,
     commitFromReceipt,
     reanchorNow,
     broadcastForceReanchor,
