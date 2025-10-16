@@ -1455,6 +1455,7 @@ function useGameSnapshot() {
   const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
   const gloryEntryLatchRef = React.useRef<boolean>(false);
   (globalThis as any).__meowtGloryEntryLatchRef = gloryEntryLatchRef;
+  const lastExposureBroadcastRef = React.useRef<number>(0);
 
   // Do not anchor from gloryRemaining while the *current* message is still in exposure,
   // or while our post-guard is active. This prevents early jumps into glory at post time.
@@ -1526,6 +1527,24 @@ function useGameSnapshot() {
         // only ever extend, never shrink
         immEndRef.current = Math.max(immEndRef.current, Number(data.end));
         nudgeQueries(qc, [0, 200]);
+      } else if (data.t === "expEnd" && Number.isFinite(data.end)) {
+        const idRaw = typeof data.id === "string" ? data.id : data.id != null ? String(data.id) : "";
+        const messageId = parseMaskMessageId(idRaw);
+        if (messageId > 0n) {
+          const end = Math.floor(Number(data.end));
+          if (Number.isFinite(end) && end > 0) {
+            if (idBig && idBig === messageId) {
+              if (end > exposureEndRef.current) {
+                exposureEndRef.current = end;
+              }
+              showUntilRef.current = Math.max(showUntilRef.current, end);
+              writeWindowTimes(messageId, exposureEndRef.current, gloryEndRef.current, immEndRef.current);
+              setNowSec((prev) => Math.max(prev, computeChainNow()));
+            } else {
+              writeWindowTimes(messageId, end, 0, 0);
+            }
+          }
+        }
       }
     };
     bcRef.current?.addEventListener("message", onMsg as any);
@@ -1534,7 +1553,7 @@ function useGameSnapshot() {
       bcRef.current?.close();
       bcRef.current = null;
     };
-  }, [computeChainNow, qc, idBig]);
+  }, [computeChainNow, qc, idBig, hasId]);
 
   function broadcastAnchor(epoch: number) {
     try {
@@ -1559,6 +1578,13 @@ function useGameSnapshot() {
   function broadcastImmEnd(end: number) {
     try {
       bcRef.current?.postMessage({ t: "immEnd", end, at: Date.now() });
+    } catch {}
+  }
+  function broadcastExposureEnd(id: bigint, end: number) {
+    if (!id || id === 0n) return;
+    if (!Number.isFinite(end) || end <= 0) return;
+    try {
+      bcRef.current?.postMessage({ t: "expEnd", end: Math.floor(end), id: String(id), at: Date.now() });
     } catch {}
   }
 
@@ -1734,6 +1760,7 @@ function useGameSnapshot() {
       lastStartRef.current = 0;
       lastContentKeyRef.current = "";
       gloryEntryLatchRef.current = false;
+      lastExposureBroadcastRef.current = 0;
 
       if (!booting) {
         showUntilRef.current = Math.max(
@@ -1779,6 +1806,7 @@ function useGameSnapshot() {
     lastContentKeyRef.current = "";
     gloryGuardUntilRef.current = 0;
     gloryEntryLatchRef.current = false;
+    lastExposureBroadcastRef.current = 0;
   }, [hasId]);
 
   React.useEffect(() => {
@@ -1806,6 +1834,7 @@ function useGameSnapshot() {
 
     // Reset dynamic windows and seed fresh ends so all devices agree instantly.
     gloryEntryLatchRef.current = false;
+    lastExposureBroadcastRef.current = 0;
     exposureEndRef.current = predictedExposureEnd || 0;
     gloryEndRef.current = predictedGloryEnd || 0;
     boostEndRef.current = 0;
@@ -2019,6 +2048,16 @@ function useGameSnapshot() {
   const cooldownLeft = Math.max(0, cooldownEnd - nowSec);
   const gloryGuardActive = nowSec < gloryGuardUntil; // compare seconds to seconds
   const exposureAnchored = idMatchesRefs && exposureEndRef.current > 0;
+  const optimisticShowLeft = Math.max(0, showUntilRef.current - nowSec);
+
+  React.useEffect(() => {
+    if (!hasId || !idBig) return;
+    if (!idMatchesRefs) return;
+    if (exposureEnd <= 0) return;
+    if (exposureEnd <= lastExposureBroadcastRef.current) return;
+    lastExposureBroadcastRef.current = exposureEnd;
+    broadcastExposureEnd(idBig, exposureEnd);
+  }, [hasId, idBig, idMatchesRefs, exposureEnd]);
 
   // If we refresh while already inside the anchored glory window, relatch the gate
   // so glory persists through the reload without waiting for the pre-exposure window.
@@ -2130,13 +2169,20 @@ function useGameSnapshot() {
     gloryEndRef.current > 0 ||
     boostEndRef.current > 0;
 
+  const lockSignalsActive =
+    (inGlory && gRemLive && gloryLeftUi > 0) ||
+    boostLeft > 0 ||
+    immLeft > 0 ||
+    gloryGuardActive;
+
   const readyToShowLocks =
-    rehydrationComplete && (hasValidAnchor || !hasId || anyWindowKnown);
+    (rehydrationComplete && (hasValidAnchor || !hasId || anyWindowKnown)) ||
+    (!rehydrationComplete && lockSignalsActive);
 
   // Prefer glory while active; otherwise boost can override immunity/guard.
   let lockKind: "boost" | "glory" | "immunity" | "none" = "none";
   let lockLeft = 0;
-  if (readyToShowLocks) {
+  if (readyToShowLocks || lockSignalsActive) {
     // Glory takes precedence whenever the current message is in glory.
     if (inGlory && gRemLive && gloryLeftUi > 0) {
       // Enter glory ONLY after exposure for this id is anchored and passed.
@@ -2168,9 +2214,12 @@ function useGameSnapshot() {
   const predictedExposureEnd = startTime && B0secs ? startTime + B0secs : 0;
   const exposureBasis = exposureEnd > 0 ? exposureEnd : predictedExposureEnd;
 
-  const remSec = endTsNum > 0 || exposureBasis > 0
+  let remSec = endTsNum > 0 || exposureBasis > 0
     ? Math.max(0, exposureBasis - nowSec)
     : remFallback;
+  if (remSec <= 0 && optimisticShowLeft > 0) {
+    remSec = optimisticShowLeft;
+  }
 
   const resolvedFlag = Boolean((m as any)?.resolved ?? (m as any)?.[10]);
   const nukedFlag = Boolean((m as any)?.nuked ?? (m as any)?.[11]);
