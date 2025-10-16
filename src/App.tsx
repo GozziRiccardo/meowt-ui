@@ -594,6 +594,47 @@ function writeWindowTimes(
 const MASK_EVENT = "meowt:mask:update";
 type MaskEventDetail = { key: string; until: number; messageId?: string | null };
 
+// ---- Hard reload helpers (last-resort to kill the “wrong layout” on poster tab) ----
+function scheduleHardReload(reason: string, delayMs = 120) {
+  if (typeof window === "undefined") return;
+  try {
+    console.debug(`[meowt] Hard reload scheduled (${reason}) in ${delayMs}ms`);
+  } catch {}
+  // Guard against accidental double reload storms (same tick)
+  if ((window as any).__meowtReloadScheduled) return;
+  (window as any).__meowtReloadScheduled = true;
+  setTimeout(() => {
+    try {
+      window.location.reload();
+    } catch {
+      window.location.assign(window.location.href);
+    }
+  }, Math.max(0, delayMs));
+}
+
+function hardReloadAfterCommitIfNeeded(params: {
+  id?: bigint;
+  exposureEnd?: number;
+  gloryEnd?: number;
+  immUntil?: number;
+  reason: "post" | "replace";
+}) {
+  const { id, exposureEnd, gloryEnd, immUntil, reason } = params || {};
+  if (!id || id === 0n) return; // nothing to do
+  if (typeof window === "undefined") return;
+  try {
+    // Defensive: ensure LS has the same windows we’ll expect after reload.
+    if (Number.isFinite(exposureEnd) && (exposureEnd || 0) > 0) {
+      writeWindowTimes(id, exposureEnd!, Math.max(0, gloryEnd || 0), Math.max(0, immUntil || 0));
+    }
+    if (Number.isFinite(immUntil) && (immUntil || 0) > 0) {
+      writeMaskUntil(IMMUNITY_KEY, immUntil!, { messageId: id });
+    }
+  } catch {}
+  // Small delay to allow BC/storage events to flush, then reload.
+  scheduleHardReload(reason, 120);
+}
+
 function emitMaskUpdate(key: string, until: number, messageId?: string) {
   if (typeof window === "undefined") return;
   try {
@@ -2643,6 +2684,14 @@ function PostBoxInner() {
                   immUntil
                 );
               }
+              // 🔧 Last-resort fix: hard-reload the *posting* tab so layout can’t regress.
+              hardReloadAfterCommitIfNeeded({
+                id: newId as bigint,
+                exposureEnd,
+                gloryEnd: predictedGloryEnd,
+                immUntil,
+                reason: "post",
+              });
             } catch { /* best effort only */ }
           }
         } catch {}
@@ -2871,6 +2920,14 @@ function ReplaceBoxInner() {
             try {
               writeMaskUntil(IMMUNITY_KEY, immUntil, { messageId: idNow as bigint });
             } catch {}
+            // 🔧 Same “nuclear” fix for replacements
+            hardReloadAfterCommitIfNeeded({
+              id: idNow as bigint,
+              exposureEnd,
+              gloryEnd: predictedGloryEnd,
+              immUntil,
+              reason: "replace",
+            });
           }
         } catch { /* best effort */ }
 
