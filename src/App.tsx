@@ -1838,7 +1838,8 @@ function useGameSnapshot() {
         nowEpoch + Math.ceil(OPTIMISTIC_SHOW_MS / 1000),
       );
     }
-    idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS;
+    // IMPORTANT: do NOT set idHold on a same-ID replacement; it hides the card and creates a flash.
+    // idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS;
 
     // Persist new window ends so refresh immediately restores the correct state.
     if (idBig && idBig !== 0n) {
