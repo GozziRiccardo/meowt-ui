@@ -1490,6 +1490,113 @@ function useGameSnapshot() {
 
   // -------- Cross-tab sync (BroadcastChannel) --------
   const bcRef = React.useRef<BroadcastChannel | null>(null);
+  const WINDOW_COMMIT_KEY = "meowt:window:commit";
+
+  type CommitSnapshot = {
+    id: string;
+    start: number;
+    exposureEnd: number;
+    gloryEnd?: number;
+    immEnd?: number;
+    rem?: number;
+    at?: number;
+  };
+
+  const adoptCommit = React.useCallback(
+    (s: CommitSnapshot | undefined | null) => {
+      if (!s) return;
+      const idStr = String(s.id ?? "");
+      if (!idStr) return;
+      let snapId = 0n;
+      try {
+        snapId = BigInt(idStr);
+      } catch {
+        snapId = 0n;
+      }
+      if (snapId <= 0n) return;
+
+      const matches =
+        lastIdRef.current === snapId ||
+        (idBig && idBig !== 0n ? idBig === snapId : true);
+
+      if (!matches) return;
+
+      const exposureEndRaw = Number(s.exposureEnd ?? 0);
+      const exposureEndVal = Number.isFinite(exposureEndRaw)
+        ? Math.max(0, Math.floor(exposureEndRaw))
+        : 0;
+      const gloryEndRaw = Number(s.gloryEnd ?? 0);
+      const gloryEndVal = Number.isFinite(gloryEndRaw)
+        ? Math.max(0, Math.floor(gloryEndRaw))
+        : 0;
+      const immEndRaw = Number(s.immEnd ?? 0);
+      const immEndVal = Number.isFinite(immEndRaw) ? Math.max(0, Math.floor(immEndRaw)) : 0;
+
+      if (exposureEndVal > 0) {
+        exposureEndRef.current = Math.max(exposureEndRef.current, exposureEndVal);
+      }
+      if (gloryEndVal > 0) {
+        gloryEndRef.current = Math.max(gloryEndRef.current, gloryEndVal);
+        showUntilRef.current = Math.max(showUntilRef.current, gloryEndRef.current);
+      }
+      if (immEndVal > 0) {
+        immEndRef.current = Math.max(immEndRef.current, immEndVal);
+        gloryGuardUntilRef.current = Math.max(gloryGuardUntilRef.current, immEndRef.current);
+        try {
+          writeMaskUntil(IMMUNITY_KEY, immEndRef.current, { messageId: snapId });
+        } catch {}
+      }
+
+      const nowMs = Date.now();
+      const atRaw = Number(s.at ?? 0);
+      const atMs = Number.isFinite(atRaw) && atRaw > 0 ? atRaw : undefined;
+      const remRaw = Number(s.rem ?? 0);
+      const remProvided = Number.isFinite(remRaw) ? Math.max(0, Math.floor(remRaw)) : undefined;
+      const ageSec =
+        atMs !== undefined && remProvided !== undefined
+          ? Math.max(0, Math.floor((nowMs - atMs) / 1000))
+          : 0;
+      const remNow =
+        remProvided !== undefined ? Math.max(0, Math.floor(remProvided - ageSec)) : undefined;
+      const startRaw = Number(s.start ?? 0);
+      const startVal = Number.isFinite(startRaw) ? Math.max(0, Math.floor(startRaw)) : 0;
+
+      const anchorEpoch =
+        exposureEndVal > 0 && remNow !== undefined
+          ? Math.max(0, exposureEndVal - remNow)
+          : startVal > 0
+          ? startVal
+          : 0;
+
+      if (anchorEpoch > 0) {
+        chainNowRef.current = { epoch: anchorEpoch, fetchedAt: nowMs };
+        setNowSec((prev) => Math.max(prev, computeChainNow()));
+      }
+
+      if (snapId && snapId !== 0n) {
+        writeWindowTimes(snapId, exposureEndRef.current, gloryEndRef.current, immEndRef.current);
+      }
+
+      nudgeQueries(qc, [0, 200, 800]);
+    },
+    [computeChainNow, idBig, qc]
+  );
+
+  const broadcastCommit = React.useCallback(
+    (s: CommitSnapshot) => {
+      try {
+        bcRef.current?.postMessage({ t: "commit", ...s });
+      } catch {}
+    },
+    []
+  );
+
+  const persistCommitForFallback = React.useCallback((s: CommitSnapshot) => {
+    try {
+      if (typeof window === "undefined") return;
+      localStorage.setItem(WINDOW_COMMIT_KEY, JSON.stringify(s));
+    } catch {}
+  }, []);
 
   const lastAnchorFromPeer = React.useRef<number>(0);
   React.useEffect(() => {
@@ -1526,6 +1633,8 @@ function useGameSnapshot() {
         // only ever extend, never shrink
         immEndRef.current = Math.max(immEndRef.current, Number(data.end));
         nudgeQueries(qc, [0, 200]);
+      } else if (data.t === "commit") {
+        adoptCommit(data as CommitSnapshot);
       }
     };
     bcRef.current?.addEventListener("message", onMsg as any);
@@ -1534,7 +1643,23 @@ function useGameSnapshot() {
       bcRef.current?.close();
       bcRef.current = null;
     };
-  }, [computeChainNow, qc, idBig]);
+  }, [adoptCommit, computeChainNow, qc, idBig]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== WINDOW_COMMIT_KEY || !e.newValue) return;
+      try {
+        const parsed = JSON.parse(e.newValue) as CommitSnapshot;
+        const atRaw = Number(parsed?.at ?? 0);
+        const atMs = Number.isFinite(atRaw) && atRaw > 0 ? atRaw : undefined;
+        if (atMs && Date.now() - atMs > 5000) return;
+        adoptCommit(parsed);
+      } catch {}
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [adoptCommit]);
 
   function broadcastAnchor(epoch: number) {
     try {
@@ -2442,6 +2567,9 @@ function useGameSnapshot() {
     nowSec,
     immLeft,
     rehydrationComplete,
+    adoptCommit,
+    broadcastCommit,
+    persistCommitForFallback,
   } as const;
 }
 const GameSnapshotContext = React.createContext<ReturnType<typeof useGameSnapshot> | null>(null);
@@ -2610,8 +2738,12 @@ function PostBoxInner() {
 
           const immSecs = Number((wins as any)?.[0] ?? 0n);
           const winGlorySecs = Number((wins as any)?.[1] ?? 0n);
-          const immUntil =
-            immSecs > 0 ? Math.floor(Date.now() / 1000) + immSecs : 0;
+          const nowMs = Date.now();
+          const nowSec = Math.floor(nowMs / 1000);
+          const immUntil = immSecs > 0 ? nowSec + immSecs : 0;
+          let exposureEnd = 0;
+          let predictedGloryEnd = 0;
+          let start = 0;
 
           if (newId && newId !== 0n) {
             if (immUntil > 0) {
@@ -2620,17 +2752,32 @@ function PostBoxInner() {
 
             try {
               // Seed exposure & glory ends for the new id right away
-              const endBn = await publicClient
-                .readContract({
-                  address: GAME as `0x${string}`,
-                  abi: GAME_ABI,
-                  functionName: "endTime",
-                  args: [newId as bigint],
-                })
-                .catch(() => 0n);
+              const [endBn, msg] = await Promise.all([
+                publicClient
+                  .readContract({
+                    address: GAME as `0x${string}`,
+                    abi: GAME_ABI,
+                    functionName: "endTime",
+                    args: [newId as bigint],
+                  })
+                  .catch(() => 0n),
+                publicClient
+                  .readContract({
+                    address: GAME as `0x${string}`,
+                    abi: GAME_ABI,
+                    functionName: "messages",
+                    args: [newId as bigint],
+                  })
+                  .catch(() => null as any),
+              ]);
 
-              const exposureEnd = Number(endBn ?? 0n);
-              const predictedGloryEnd =
+              exposureEnd = Number(endBn ?? 0n);
+              const rawStart = (msg as any)?.startTime ?? (msg as any)?.[3] ?? 0n;
+              const startCandidate = Number((rawStart ?? 0n) as bigint);
+              start = Number.isFinite(startCandidate)
+                ? Math.max(0, Math.floor(startCandidate))
+                : 0;
+              predictedGloryEnd =
                 exposureEnd > 0 && winGlorySecs > 0
                   ? exposureEnd + winGlorySecs
                   : 0;
@@ -2644,6 +2791,21 @@ function PostBoxInner() {
                 );
               }
             } catch { /* best effort only */ }
+
+            if (newId && newId !== 0n && exposureEnd > 0) {
+              const commit = {
+                id: String(newId),
+                start,
+                exposureEnd,
+                gloryEnd: predictedGloryEnd || undefined,
+                immEnd: immUntil || undefined,
+                rem: Math.max(0, exposureEnd - nowSec),
+                at: nowMs,
+              };
+              try { snap.adoptCommit(commit); } catch {}
+              snap.broadcastCommit(commit);
+              snap.persistCommitForFallback(commit);
+            }
           }
         } catch {}
 
@@ -2853,13 +3015,38 @@ function ReplaceBoxInner() {
           const exposureEnd = Number(endBn ?? 0n);
           const winGlorySecs = Number((wins2 as any)?.[1] ?? 0n);
           const immSecs = Number((wins2 as any)?.[0] ?? 0n);
+          const nowMs = Date.now();
+          const nowSec = Math.floor(nowMs / 1000);
           const predictedGloryEnd =
             exposureEnd > 0 && winGlorySecs > 0
               ? exposureEnd + winGlorySecs
               : 0;
+          const immUntil = nowSec + Math.max(0, immSecs);
+          let start = 0;
 
-          const immUntil =
-            Math.floor(Date.now() / 1000) + Math.max(0, immSecs);
+          if (idNow && idNow !== 0n) {
+            if (immUntil > 0) {
+              try {
+                writeMaskUntil(IMMUNITY_KEY, immUntil, { messageId: idNow as bigint });
+              } catch {}
+            }
+
+            try {
+              const msg2 = await publicClient
+                .readContract({
+                  address: GAME as `0x${string}`,
+                  abi: GAME_ABI,
+                  functionName: "messages",
+                  args: [idNow as bigint],
+                })
+                .catch(() => null as any);
+              const rawStart = (msg2 as any)?.startTime ?? (msg2 as any)?.[3] ?? 0n;
+              const startCandidate = Number((rawStart ?? 0n) as bigint);
+              start = Number.isFinite(startCandidate)
+                ? Math.max(0, Math.floor(startCandidate))
+                : 0;
+            } catch {}
+          }
 
           if (idNow && idNow !== 0n && exposureEnd > 0) {
             writeWindowTimes(
@@ -2868,9 +3055,19 @@ function ReplaceBoxInner() {
               predictedGloryEnd,
               immUntil
             );
-            try {
-              writeMaskUntil(IMMUNITY_KEY, immUntil, { messageId: idNow as bigint });
-            } catch {}
+
+            const commit = {
+              id: String(idNow),
+              start,
+              exposureEnd,
+              gloryEnd: predictedGloryEnd || undefined,
+              immEnd: immUntil || undefined,
+              rem: Math.max(0, exposureEnd - nowSec),
+              at: nowMs,
+            };
+            try { snap.adoptCommit(commit); } catch {}
+            snap.broadcastCommit(commit);
+            snap.persistCommitForFallback(commit);
           }
         } catch { /* best effort */ }
 
