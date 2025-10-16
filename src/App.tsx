@@ -552,6 +552,7 @@ function readMaskState(key: string): MaskPersisted {
 
 // ---- Window times persistence (refresh resilience) ----
 const WINDOW_TIMES_KEY = "meowt:window:times";
+const WINDOW_EVENT = "meowt:window:update";
 type WindowTimes = {
   messageId: string;
   exposureEnd?: number;
@@ -559,6 +560,23 @@ type WindowTimes = {
   immEnd?: number;
   timestamp: number;
 };
+
+function emitWindowTimesUpdate(payload: WindowTimes) {
+  if (typeof window === "undefined") return;
+  try {
+    window.dispatchEvent(new CustomEvent(WINDOW_EVENT, { detail: payload }));
+  } catch {
+    window.dispatchEvent(new CustomEvent(WINDOW_EVENT, { detail: payload } as any));
+  }
+}
+
+function broadcastWindowTimes(payload: WindowTimes) {
+  try {
+    const bc = new BroadcastChannel("meowt-sync-v1");
+    bc.postMessage({ t: "windows", payload, at: Date.now() });
+    bc.close();
+  } catch {}
+}
 
 function readWindowTimes(messageId: bigint): WindowTimes | null {
   if (!messageId || messageId === 0n) return null;
@@ -588,6 +606,8 @@ function writeWindowTimes(
       timestamp: Date.now(),
     };
     localStorage.setItem(WINDOW_TIMES_KEY, JSON.stringify(payload));
+    emitWindowTimesUpdate(payload);
+    broadcastWindowTimes(payload);
   } catch {}
 }
 
@@ -1550,6 +1570,18 @@ function useGameSnapshot() {
         // only ever extend, never shrink
         immEndRef.current = Math.max(immEndRef.current, Number(data.end));
         nudgeQueries(qc, [0, 200]);
+      } else if (data.t === "windows" && data.payload) {
+        const p = data.payload as WindowTimes;
+        const pid = parseMaskMessageId(p.messageId);
+        if (pid && pid === idBig) {
+          if (p.exposureEnd)
+            exposureEndRef.current = Math.max(exposureEndRef.current, p.exposureEnd);
+          if (p.gloryEnd)
+            gloryEndRef.current = Math.max(gloryEndRef.current, p.gloryEnd);
+          if (p.immEnd) immEndRef.current = Math.max(immEndRef.current, p.immEnd);
+          setNowSec((prev) => Math.max(prev, computeChainNow()));
+          nudgeQueries(qc, [0, 150, 600]);
+        }
       }
     };
     bcRef.current?.addEventListener("message", onMsg as any);
@@ -1559,6 +1591,50 @@ function useGameSnapshot() {
       bcRef.current = null;
     };
   }, [computeChainNow, qc, idBig]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onUpdate = (evt: Event) => {
+      const detail = (evt as CustomEvent<WindowTimes>).detail;
+      if (!detail) return;
+      const pid = parseMaskMessageId(detail.messageId);
+      if (!pid || pid !== idBig) return;
+
+      if (detail.exposureEnd)
+        exposureEndRef.current = Math.max(exposureEndRef.current, detail.exposureEnd);
+      if (detail.gloryEnd)
+        gloryEndRef.current = Math.max(gloryEndRef.current, detail.gloryEnd);
+      if (detail.immEnd) immEndRef.current = Math.max(immEndRef.current, detail.immEnd);
+
+      setNowSec((prev) => Math.max(prev, computeChainNow()));
+      nudgeQueries(qc, [0, 150, 600]);
+    };
+    window.addEventListener(WINDOW_EVENT, onUpdate as any);
+    return () => window.removeEventListener(WINDOW_EVENT, onUpdate as any);
+  }, [idBig, qc, computeChainNow]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onStorage = (evt: StorageEvent) => {
+      if (evt.key !== WINDOW_TIMES_KEY || !evt.newValue) return;
+      try {
+        const detail = JSON.parse(evt.newValue) as WindowTimes;
+        const pid = parseMaskMessageId(detail.messageId);
+        if (!pid || pid !== idBig) return;
+
+        if (detail.exposureEnd)
+          exposureEndRef.current = Math.max(exposureEndRef.current, detail.exposureEnd);
+        if (detail.gloryEnd)
+          gloryEndRef.current = Math.max(gloryEndRef.current, detail.gloryEnd);
+        if (detail.immEnd) immEndRef.current = Math.max(immEndRef.current, detail.immEnd);
+
+        setNowSec((prev) => Math.max(prev, computeChainNow()));
+        nudgeQueries(qc, [0, 150, 600]);
+      } catch {}
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [idBig, qc, computeChainNow]);
 
   function broadcastAnchor(epoch: number) {
     try {
