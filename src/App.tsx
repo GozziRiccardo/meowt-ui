@@ -2157,7 +2157,12 @@ function useGameSnapshot() {
   }
 
   const remFallback = Math.max(0, Number(remChainBN ?? 0n));
-  const remSec = endTsNum > 0 || exposureEnd > 0 ? exposureLeft : remFallback;
+  const predictedExposureEnd = startTime && B0secs ? startTime + B0secs : 0;
+  const exposureBasis = exposureEnd > 0 ? exposureEnd : predictedExposureEnd;
+
+  const remSec = endTsNum > 0 || exposureBasis > 0
+    ? Math.max(0, exposureBasis - nowSec)
+    : remFallback;
 
   const resolvedFlag = Boolean((m as any)?.resolved ?? (m as any)?.[10]);
   const nukedFlag = Boolean((m as any)?.nuked ?? (m as any)?.[11]);
@@ -2457,28 +2462,16 @@ function useLiveChainId() {
 function PostBox() {
   const isConnected = useUiConnected();
   const snap = useSnap();
-  if (!snap.rehydrationComplete) return null;
 
-  // Don’t render the post box while snapshot is still loading to avoid the idle flash.
+  if (!snap.rehydrationComplete) return null;
   if (snap.loading) return null;
 
-  // If no message is being shown at all, we are idle by definition → show Post UI.
-  // This bypasses any stale latch/guard that might linger when the card itself is hidden.
-  const showing = Boolean(snap.show);
-  if (!showing) {
-    return isConnected ? <PostBoxInner /> : null;
-  }
+  // If we're rendering the active card at all, don't render the Post UI.
+  if (snap.show) return null;
 
-  const msgId = snap.id;
-  const hasActive = snap.rem > 0n;
-  // When there’s no active id, treat as fully unlocked/idle to avoid stale latches.
-  const glorySec = msgId && msgId !== 0n ? Number(snap.gloryRem ?? 0) : 0;
-  const lockKind = snap.lockKind ?? "none";
-  const anyLock = msgId && msgId !== 0n ? (lockKind !== "none") : false;
-
-  // If there's NO active message and NO locks and NOT crowning, show post box immediately,
-  // regardless of transient loading flags.
-  if (!hasActive && glorySec <= 0 && !anyLock) {
+  // Only show Post UI when there's truly no active message on-chain.
+  const hasId = Boolean(snap.id && snap.id !== 0n);
+  if (!hasId) {
     return isConnected ? <PostBoxInner /> : null;
   }
   return null;
@@ -2569,11 +2562,28 @@ function PostBoxInner() {
 
         // Proactively pull the new id, kick queries, and clear any latent glory mask
         try {
-          await publicClient.readContract({
-            address: GAME as `0x${string}`,
-            abi: GAME_ABI,
-            functionName: "activeMessageId",
-          });
+          const [newId, wins] = await Promise.all([
+            publicClient
+              .readContract({
+                address: GAME as `0x${string}`,
+                abi: GAME_ABI,
+                functionName: "activeMessageId",
+              })
+              .catch(() => 0n),
+            publicClient
+              .readContract({
+                address: GAME as `0x${string}`,
+                abi: GAME_ABI,
+                functionName: "windows",
+              })
+              .catch(() => null),
+          ]);
+
+          const immSecs = Number((wins as any)?.[0] ?? 0n);
+          if (newId && newId !== 0n && immSecs > 0) {
+            const immUntil = Math.floor(Date.now() / 1000) + immSecs;
+            try { writeMaskUntil(IMMUNITY_KEY, immUntil, { messageId: newId }); } catch {}
+          }
         } catch {}
 
         nudgeQueries(qc, [0, 500, 1500]);
