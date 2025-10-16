@@ -1332,6 +1332,47 @@ function useGameSnapshot() {
     () => Math.floor(Date.now() / 1000) < commitLatchUntilRef.current,
     [],
   );
+  // --- Commit "stick" so UI can't regress during early seconds ---
+  const commitStickUntilRef = React.useRef<number>(0);
+  const commitStickIdRef = React.useRef<bigint>(0n);
+  const armCommitStick = React.useCallback((id: bigint, secs: number) => {
+    if (!id || id === 0n || !Number.isFinite(secs) || secs <= 0) return;
+    const nowS = Math.floor(Date.now() / 1000);
+    commitStickIdRef.current = id;
+    commitStickUntilRef.current = Math.max(
+      commitStickUntilRef.current,
+      nowS + Math.floor(secs),
+    );
+  }, []);
+  const extendCommitStick = React.useCallback((secs: number) => {
+    if (!Number.isFinite(secs) || secs <= 0) return;
+    const nowS = Math.floor(Date.now() / 1000);
+    commitStickUntilRef.current = Math.max(
+      commitStickUntilRef.current,
+      nowS + Math.floor(secs),
+    );
+  }, []);
+  // Refs and latches
+  const lastIdRef = React.useRef<bigint>(0n);
+  const exposureEndRef = React.useRef<number>(0);
+  const gloryEndRef = React.useRef<number>(0);
+  const boostEndRef = React.useRef<number>(0);
+  const cooldownEndRef = React.useRef<number>(0);
+  const immEndRef = React.useRef<number>(0);
+  const showUntilRef = React.useRef<number>(0);
+  const localShowOverrideUntilRef = React.useRef<number>(0);
+  const idHoldUntilRef = React.useRef<number>(0);
+  const lastStartRef = React.useRef<number>(0);
+  const lastContentKeyRef = React.useRef<string>("");
+  const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
+  const gloryEntryLatchRef = React.useRef<boolean>(false);
+  (globalThis as any).__meowtGloryEntryLatchRef = gloryEntryLatchRef;
+
+  const stickOkId =
+    (hasId && idBig !== 0n && commitStickIdRef.current === idBig) ||
+    (!hasId && lastIdRef.current && lastIdRef.current === commitStickIdRef.current);
+  const stickActive =
+    stickOkId && Math.floor(Date.now() / 1000) < commitStickUntilRef.current;
 
   // -------- Batched reads --------
   const { data: raw, isFetching: rawFetching } = useReadContracts({
@@ -1358,7 +1399,7 @@ function useGameSnapshot() {
   });
 
   // -------- Live reads --------
-  const pollEnabled = hasId && leaderActive;
+  const pollEnabled = hasId && leaderActive && !stickActive;
   const { data: remChainBN } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
@@ -1465,42 +1506,6 @@ function useGameSnapshot() {
     return Math.floor(Date.now() / 1000);
   }, []);
 
-  // Refs and latches
-  const lastIdRef = React.useRef<bigint>(0n);
-  const exposureEndRef = React.useRef<number>(0);
-  const gloryEndRef = React.useRef<number>(0);
-  const boostEndRef = React.useRef<number>(0);
-  const cooldownEndRef = React.useRef<number>(0);
-  const immEndRef = React.useRef<number>(0);
-  const showUntilRef = React.useRef<number>(0);
-  const localShowOverrideUntilRef = React.useRef<number>(0);
-  const idHoldUntilRef = React.useRef<number>(0);
-  const lastStartRef = React.useRef<number>(0);
-  const lastContentKeyRef = React.useRef<string>("");
-  const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
-  const gloryEntryLatchRef = React.useRef<boolean>(false);
-  (globalThis as any).__meowtGloryEntryLatchRef = gloryEntryLatchRef;
-  // --- Commit "stick" so UI can't regress during early seconds ---
-  const commitStickUntilRef = React.useRef<number>(0);
-  const commitStickIdRef = React.useRef<bigint>(0n);
-  const armCommitStick = React.useCallback((id: bigint, secs: number) => {
-    if (!id || id === 0n || !Number.isFinite(secs) || secs <= 0) return;
-    const nowS = Math.floor(Date.now() / 1000);
-    commitStickIdRef.current = id;
-    commitStickUntilRef.current = Math.max(
-      commitStickUntilRef.current,
-      nowS + Math.floor(secs),
-    );
-  }, []);
-  const extendCommitStick = React.useCallback((secs: number) => {
-    if (!Number.isFinite(secs) || secs <= 0) return;
-    const nowS = Math.floor(Date.now() / 1000);
-    commitStickUntilRef.current = Math.max(
-      commitStickUntilRef.current,
-      nowS + Math.floor(secs),
-    );
-  }, []);
-
   // Lets the posting tab force "show" briefly even if activeMessageId lags
   function kickLocalShow(seconds = 8) {
     const nowS = Math.floor(Date.now() / 1000);
@@ -1510,10 +1515,10 @@ function useGameSnapshot() {
     );
     extendCommitStick(CLICK_GRACE_STICK_SECS);
   }
-
   // Do not anchor from gloryRemaining while the *current* message is still in exposure,
   // or while our post-guard is active. This prevents early jumps into glory at post time.
   function suppressGloryAnchorNow(): boolean {
+    if (stickActive) return true;
     if (!idBig || idBig === 0n) return true; // nothing meaningful to anchor
     const idMatches = lastIdRef.current === idBig;
     // Exposure is "anchored" once we know exposureEnd for this id
@@ -1740,6 +1745,10 @@ function useGameSnapshot() {
         (idBig && idBig !== 0n ? idBig === snapId : true);
 
       if (!matches) return;
+
+      lastIdRef.current = snapId;
+      zeroIdGraceUntilRef.current = 0;
+      idHoldUntilRef.current = 0;
 
       const exposureEndRaw = Number(s.exposureEnd ?? 0);
       const exposureEndVal = Number.isFinite(exposureEndRaw)
@@ -2708,14 +2717,7 @@ function useGameSnapshot() {
   const liveProofNow =
     Number(remChainBN ?? 0n) > 0 || Number(gloryRemChainBN ?? 0n) > 0;
   const localOverrideActive = nowSec < localShowOverrideUntilRef.current;
-  // Local stick is active only for the current (or last known) id
-  const stickOkId =
-    (idBig && idBig !== 0n && commitStickIdRef.current === idBig) ||
-    (!idBig &&
-      lastIdRef.current &&
-      lastIdRef.current === commitStickIdRef.current);
-  const stickActive =
-    stickOkId && Math.floor(Date.now() / 1000) < commitStickUntilRef.current;
+  // stickActive (computed earlier) keeps the freshly committed card visible during hard commits.
   // If we have live proof, allow showing even before batched `raw` settles.
   const baseShow =
     (hasId || localOverrideActive) &&
@@ -3003,6 +3005,7 @@ function PostBoxInner() {
             try { snap.adoptCommit(commit); } catch {}
             snap.broadcastCommit(commit);
             snap.persistCommitForFallback(commit);
+            try { (snap as any)?.extendCommitStick?.(8); } catch {}
             snap.forceLeader(6000);
             await snap.reanchorNow();
             snap.broadcastForceReanchor();
@@ -3223,6 +3226,7 @@ function ReplaceBoxInner() {
             try { snap.adoptCommit(commit); } catch {}
             snap.broadcastCommit(commit);
             snap.persistCommitForFallback(commit);
+            try { (snap as any)?.extendCommitStick?.(8); } catch {}
             snap.forceLeader(6000);
             await snap.reanchorNow();
             snap.broadcastForceReanchor();
@@ -4200,6 +4204,7 @@ function ActiveCard() {
     let preflightError: string | null = null;
     try {
       if (!canVote || !publicClient || !address) return;
+      try { (snap as any)?.extendCommitStick?.(6); } catch {}
       // Preflight network switch
       await ensureOnTargetChain().catch((e: any) => {
         preflightError = String(e?.message || e);
@@ -4257,6 +4262,7 @@ function ActiveCard() {
     let preflightError: string | null = null;
     try {
       if (!canVote || !publicClient || !address) return;
+      try { (snap as any)?.extendCommitStick?.(6); } catch {}
       // Preflight network switch
       await ensureOnTargetChain().catch((e: any) => {
         preflightError = String(e?.message || e);
@@ -4326,6 +4332,7 @@ function ActiveCard() {
       });
       if (!isConnected || !publicClient || !address) return;
       if (boostActive || boostCooldown || glorySec > 0) return;
+      try { (snap as any)?.extendCommitStick?.(6); } catch {}
       setBoostBusy(true);
 
       // Re-read cost (live) as a safety net
