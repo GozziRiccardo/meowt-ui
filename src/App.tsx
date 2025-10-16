@@ -1366,6 +1366,8 @@ function useGameSnapshot() {
       // IMPORTANT: on focus, fetch immediately so the tab "catches up"
       refetchOnWindowFocus: true,
       refetchInterval: 2500,
+      // Keep the prior value during refetch so the UI stays stable when clicking
+      placeholderData: (prev) => prev,
     },
   });
 
@@ -1378,6 +1380,7 @@ function useGameSnapshot() {
       staleTime: 0,
       refetchOnWindowFocus: true,
       refetchInterval: 2500,
+      placeholderData: (prev) => prev,
     },
   });
 
@@ -2679,7 +2682,11 @@ function useGameSnapshot() {
       liveProofNow ||
       gloryActiveHint // glory predicted/confirmed keeps the card visible
     );
-  const rawReadyEnough = Boolean(raw) || liveProofNow || commitLatchActive();
+  // While the optimistic hold is active, allow the UI to persist without fresh raw data.
+  const optimisticHoldActive =
+    (hasId || localOverrideActive) && nowSec < untilShow + SHOW_CUSHION;
+  const rawReadyEnough =
+    optimisticHoldActive || Boolean(raw) || liveProofNow || commitLatchActive();
   const effectiveShow =
     baseShow &&
     !definitelyOver &&
