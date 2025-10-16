@@ -2995,7 +2995,8 @@ const GLORY_MASK_KEY = "meowt:mask:glory";
 const NUKE_MASK_KEY = "meowt:mask:nuke";
 const MOD_MASK_KEY = "meowt:mask:mod";
 const MOD_DISARM_LS_KEY = "meowt:mod:disarm";
-const GLORY_MASK_LATCH_PAD = 2; // seconds before glory ends to begin masking
+// seconds before glory ends to begin masking (hard guard against early flashes)
+const GLORY_MASK_LATCH_PAD = 3;
 
 let modMaskLatchedIdsRefGlobal: React.MutableRefObject<Set<bigint>> | null = null;
 let maskSuppressionUntil = 0;
@@ -3215,7 +3216,7 @@ function ActiveCard() {
     rehydrationStartedRef.current = rehydrated;
   }, [rehydrated, GLORY_MAX_SPAN]);
 
-  // Persist once when we ENTER the latch window (last 2s of glory)
+  // Persist once when we ENTER the latch window (last 3s of glory)
   const predictedGloryEnd = Number((snap as any)?.gloryPredictedEnd ?? 0);
   const predictedMaskEnd =
     predictedGloryEnd > 0 ? predictedGloryEnd + MASK_SECS : 0;
@@ -3298,17 +3299,16 @@ function ActiveCard() {
     : 0;
   const latchPadStart =
     maskEnd > 0 ? Math.max(0, maskEnd - (MASK_SECS + GLORY_MASK_LATCH_PAD)) : 0;
-  // Prevent mask from appearing too early on refresh: require we be in the latch pad
-  // (last few seconds of glory) or already in the freeze window.
-  const allowGloryMaskEarly = glorySec > 0 && glorySec <= GLORY_MASK_LATCH_PAD;
-  const allowGloryMaskAfter =
-    glorySec <= 0 && (predictedGloryEnd <= 0 || now >= predictedGloryEnd);
+  // Hard guard: only allow mask in the last 3s of glory or after glory has ended.
+  // This prevents any early flashes while still in crowned mode.
+  const gloryTriggerGuardOk =
+    glorySec <= 0 || (glorySec > 0 && glorySec <= GLORY_MASK_LATCH_PAD);
   const gloryMaskEligible =
     rehydrated &&
     maskEnd > 0 &&
     now >= latchPadStart &&
     now < maskEnd &&
-    (allowGloryMaskAfter || allowGloryMaskEarly);
+    gloryTriggerGuardOk;
   const rawLeft = maskEnd > 0 ? maskEnd - now : 0;
   React.useEffect(() => {
     if (gloryMaskEligible) {
