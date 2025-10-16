@@ -2508,6 +2508,7 @@ function PostBoxInner() {
   const qc = useQueryClient();
   const [toast, setToast] = React.useState("");
   const { setQuiet } = useQuiet();
+  const snap = useSnap();
 
   const { data: decimals } = useReadContract({
     address: TOKEN as `0x${string}`,
@@ -2535,6 +2536,15 @@ function PostBoxInner() {
     setPosting(true);
     let preflightError: string | null = null;
     try {
+      try {
+        const activeId = (snap as any)?.id as bigint | undefined;
+        if (activeId && activeId !== 0n) {
+          writeModDisarmLS(
+            activeId,
+            Math.floor(Date.now() / 1000) + 28
+          );
+        }
+      } catch {}
       // Preflight network switch
       await ensureOnTargetChain().catch((e: any) => {
         preflightError = String(e?.message || e);
@@ -2712,6 +2722,7 @@ function ReplaceBoxInner() {
   const qc = useQueryClient();
   const [toast, setToast] = React.useState("");
   const { setQuiet } = useQuiet();
+  const snap = useSnap();
 
   // Live "Required now"
   const { data: required } = useReadContract({
@@ -2753,6 +2764,15 @@ function ReplaceBoxInner() {
     setReplacing(true);
     let preflightError: string | null = null;
     try {
+      try {
+        const activeId = (snap as any)?.id as bigint | undefined;
+        if (activeId && activeId !== 0n) {
+          writeModDisarmLS(
+            activeId,
+            Math.floor(Date.now() / 1000) + 28
+          );
+        }
+      } catch {}
       // Preflight network switch
       await ensureOnTargetChain().catch((e: any) => {
         preflightError = String(e?.message || e);
@@ -2917,23 +2937,54 @@ function ReplaceBoxInner() {
 const GLORY_MASK_KEY = "meowt:mask:glory";
 const NUKE_MASK_KEY = "meowt:mask:nuke";
 const MOD_MASK_KEY = "meowt:mask:mod";
+const MOD_DISARM_LS_KEY = "meowt:mod:disarm";
 const GLORY_MASK_LATCH_PAD = 2; // seconds before glory ends to begin masking
 
 let modMaskLatchedIdsRefGlobal: React.MutableRefObject<Set<bigint>> | null = null;
 let maskSuppressionUntil = 0;
 let suppressedMaskTypes = new Set<string>();
+
+function writeModDisarmLS(id: bigint | number | string, untilEpochSec: number) {
+  try {
+    if (!id) return;
+    localStorage.setItem(
+      MOD_DISARM_LS_KEY,
+      JSON.stringify({
+        id: String(id),
+        until: Math.max(0, Math.floor(untilEpochSec)),
+      })
+    );
+  } catch {}
+}
+
+function readModDisarmLS(): { id: string; until: number } | null {
+  try {
+    const raw = localStorage.getItem(MOD_DISARM_LS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed.id === "string" &&
+      Number.isFinite(parsed.until)
+    ) {
+      return { id: parsed.id, until: Math.floor(parsed.until) };
+    }
+  } catch {}
+  return null;
+}
+
+function clearModDisarmLS() {
+  try {
+    localStorage.removeItem(MOD_DISARM_LS_KEY);
+  } catch {}
+}
 function suppressMasksFor(seconds: number, types: string[] = []) {
   const next = Math.floor(Date.now() / 1000) + Math.max(0, seconds);
   maskSuppressionUntil = Math.max(maskSuppressionUntil, next);
-  const touchesModMask = types.length === 0 || types.includes(MOD_MASK_KEY);
   if (types.length === 0) {
     suppressedMaskTypes.add("*");
   } else {
     types.forEach((t) => suppressedMaskTypes.add(t));
-  }
-  // NEW: if we’re suppressing the MOD mask, clear the “latched once” IDs
-  if (touchesModMask) {
-    modMaskLatchedIdsRefGlobal?.current.clear();
   }
 }
 function extendMaskSuppression(seconds: number) {
@@ -3323,7 +3374,14 @@ function ActiveCard() {
     modDisarmUntilRef.current = Math.floor(Date.now() / 1000) + Math.max(0, seconds);
   }
   function isModDisarmed(id: bigint) {
-    return !!id && id === modDisarmIdRef.current && now < modDisarmUntilRef.current;
+    if (!id || id === 0n) return false;
+    const inMem =
+      id === modDisarmIdRef.current && now < modDisarmUntilRef.current;
+    if (inMem) return true;
+    const ls = readModDisarmLS();
+    if (!ls) return false;
+    if (ls.id !== String(id)) return false;
+    return now < ls.until;
   }
   React.useEffect(() => {
     const persistedNuke = readMaskState(NUKE_MASK_KEY);
@@ -3383,6 +3441,10 @@ function ActiveCard() {
           if (prevId && prevId !== 0n) {
             // Always disarm so the next post won't echo the MOD mask.
             disarmModFor(prevId, MOD_RETRIGGER_DEBOUNCE_SECS);
+            writeModDisarmLS(
+              prevId,
+              Math.floor(Date.now() / 1000) + MOD_RETRIGGER_DEBOUNCE_SECS
+            );
           }
           modMaskMessageIdRef.current = 0n;
           setModFrozenMessage(null);
@@ -3465,6 +3527,10 @@ function ActiveCard() {
       if (prevId && prevId !== 0n) {
         // avoid instant re-trigger for the same ID
         disarmModFor(prevId, MOD_RETRIGGER_DEBOUNCE_SECS);
+        writeModDisarmLS(
+          prevId,
+          Math.floor(Date.now() / 1000) + MOD_RETRIGGER_DEBOUNCE_SECS
+        );
       }
       modMaskLatchedIdsRef.current.clear();
       modMaskUntilRef.current = 0;
@@ -3524,6 +3590,16 @@ function ActiveCard() {
   }, [hasActive]);
   const lastShownIdRef = React.useRef<bigint>(0n);
   const hadActiveRef = React.useRef<boolean>(false);
+  const lastDisarmTrackedIdRef = React.useRef<bigint>(0n);
+
+  React.useEffect(() => {
+    if (!msgId || msgId === 0n) return;
+    const previous = lastDisarmTrackedIdRef.current;
+    if (previous !== 0n && previous !== msgId) {
+      clearModDisarmLS();
+    }
+    lastDisarmTrackedIdRef.current = msgId;
+  }, [msgId]);
 
   React.useEffect(() => {
     if (!hasActive || !currentMessage || !publicClient || !msgId || msgId === 0n) {
@@ -3699,6 +3775,7 @@ function ActiveCard() {
       writeMaskUntil(MOD_MASK_KEY, 0);
       setModFrozenMessage(null);
       clearGloryMaskState();
+      clearModDisarmLS();
     }
   }, [
     hasActive,
@@ -3725,7 +3802,8 @@ function ActiveCard() {
     hadActiveRef.current = hasActive;
   }, [msgId, hasActive, publicClient, NUKE_MASK_SECS]);
 
-  const showModMask = now < modMaskUntilRef.current;
+  const showModMask =
+    now < modMaskUntilRef.current && !masksSuppressed(MOD_MASK_KEY);
   const showNukeMask = !showModMask && now < nukeMaskUntilRef.current;
   const modMaskLeft = showModMask
     ? Math.max(0, Math.floor(modMaskUntilRef.current - now))
