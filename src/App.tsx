@@ -1227,6 +1227,16 @@ function useGameSnapshot() {
   }
   const isLeader = usePollLeadership(bcSupported);
 
+  // ---- Short leader override (posting/replacing tab forces itself leader briefly)
+  const leaderOverrideUntilRef = React.useRef(0);
+  const forceLeader = React.useCallback((ms = 6000) => {
+    leaderOverrideUntilRef.current = Math.max(
+      leaderOverrideUntilRef.current,
+      Date.now() + Math.max(1000, ms)
+    );
+  }, []);
+  const leaderActive = isLeader || Date.now() < leaderOverrideUntilRef.current;
+
   // -------- Boot anti-ghost settings --------
   const BOOT_MODE_MS = 2500;
   const APP_BOOT_TS = React.useRef(Date.now()).current;
@@ -1343,7 +1353,7 @@ function useGameSnapshot() {
   });
 
   // -------- Live reads --------
-  const pollEnabled = hasId && (!quiet || commitLatchActive()) && isLeader;
+  const pollEnabled = hasId && leaderActive;
   const { data: remChainBN } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
@@ -1542,11 +1552,23 @@ function useGameSnapshot() {
     } catch {}
   }, []);
 
+  function broadcastForceReanchor() {
+    try {
+      bcRef.current?.postMessage({ t: "forceReanchor" });
+    } catch {}
+  }
+
   // Re-anchor all local clocks/ends once, then nudge queries + broadcast
-  const forceReanchor = React.useCallback(async () => {
+  const reanchorNow = React.useCallback(async () => {
+    if (!publicClient) {
+      setNowSec((prev) => Math.max(prev, computeChainNow()));
+      nudgeQueries(qc, [0, 120, 600, 1400]);
+      broadcastNudge();
+      return;
+    }
     try {
       setNowSec((prev) => Math.max(prev, computeChainNow()));
-      if (hasId && publicClient) {
+      if (hasId) {
         const [remRaw, gloryRemRaw, boostedRemRaw, cooldownRemRaw] = await Promise.all([
           publicClient
             .readContract({
@@ -1600,7 +1622,7 @@ function useGameSnapshot() {
         }
 
         const bestEpoch = candidates.length ? Math.max(...candidates) : 0;
-        if (bestEpoch > 0) {
+        if (bestEpoch > 0 && Number.isFinite(bestEpoch)) {
           chainNowRef.current = { epoch: bestEpoch, fetchedAt: Date.now() };
           setNowSec((prev) => Math.max(prev, computeChainNow()));
           broadcastAnchor(bestEpoch);
@@ -1617,7 +1639,8 @@ function useGameSnapshot() {
 
         const nowEpoch = Math.floor(Date.now() / 1000);
         if (gRem > 0) {
-          const predictedGloryEnd = gloryEndPred > 0 ? gloryEndPred : nowEpoch + gRem;
+          const predictedGloryEnd =
+            startTime && B0secs && winGlory ? startTime + B0secs + winGlory : nowEpoch + gRem;
           gloryEndRef.current = Math.max(gloryEndRef.current, predictedGloryEnd);
           showUntilRef.current = Math.max(showUntilRef.current, predictedGloryEnd);
         }
@@ -1631,19 +1654,20 @@ function useGameSnapshot() {
         if (cooldownRem > 0) {
           cooldownEndRef.current = Math.max(cooldownEndRef.current, nowEpoch + cooldownRem);
         }
-
-        // Rehydrate immunity quickly
-        const persisted = readMaskState(IMMUNITY_KEY);
-        const pid = parseMaskMessageId(persisted?.messageId);
-        const nowS = Math.floor(Date.now() / 1000);
-        if (pid === idBig && Number.isFinite(persisted?.until) && persisted!.until > nowS) {
-          immEndRef.current = Math.max(immEndRef.current, persisted!.until);
-        }
       }
-    } finally {
-      nudgeQueries(qc, [0, 120, 600, 1400]);
-      broadcastNudge();
+    } catch {
+      /* ignore network hiccups; we'll still nudge queries below */
     }
+    try {
+      const persisted = readMaskState(IMMUNITY_KEY);
+      const pid = parseMaskMessageId(persisted?.messageId);
+      const nowS = Math.floor(Date.now() / 1000);
+      if (pid === idBig && Number.isFinite(persisted?.until) && persisted!.until > nowS) {
+        immEndRef.current = Math.max(immEndRef.current, persisted!.until);
+      }
+    } catch {}
+    nudgeQueries(qc, [0, 120, 600, 1400]);
+    broadcastNudge();
   }, [
     qc,
     publicClient,
@@ -1657,12 +1681,6 @@ function useGameSnapshot() {
     broadcastNudge,
     winFreeze,
   ]);
-
-  function broadcastForceReanchor() {
-    try {
-      bcRef.current?.postMessage({ t: "forceReanchor", at: Date.now() });
-    } catch {}
-  }
   const WINDOW_COMMIT_KEY = "meowt:window:commit";
 
   type CommitSnapshot = {
@@ -1901,7 +1919,7 @@ function useGameSnapshot() {
     broadcastCommit(commit);
     persistCommitForFallback(commit);
 
-    return { id, exposureEnd, predictedGloryEnd, immUntil };
+    return { id, exposureEnd, predictedGloryEnd, immUntil, start };
   }
 
   const lastAnchorFromPeer = React.useRef<number>(0);
@@ -1926,7 +1944,7 @@ function useGameSnapshot() {
       } else if (data.t === "nudge") {
         nudgeQueries(qc, [0, 500]);
       } else if (data.t === "forceReanchor") {
-        forceReanchor();
+        void reanchorNow();
       } else if (data.t === "boostEnd" && Number.isFinite(data.end)) {
         const end = Number(data.end);
         if (end > boostEndRef.current) {
@@ -1951,7 +1969,7 @@ function useGameSnapshot() {
       bcRef.current?.close();
       bcRef.current = null;
     };
-  }, [adoptCommit, computeChainNow, qc, idBig, forceReanchor]);
+  }, [adoptCommit, computeChainNow, qc, idBig, reanchorNow]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2632,20 +2650,19 @@ function useGameSnapshot() {
   React.useEffect(() => {
     // Re-anchor clocks when the tab becomes active again (focus/pageshow/visibility)
     if (typeof window === "undefined" || typeof document === "undefined") return;
-    const reanchor = () => {
-      forceReanchor();
-    };
-    const onVis = () => document.visibilityState === "visible" && forceReanchor();
-    window.addEventListener("focus", reanchor, true);
-    window.addEventListener("pageshow", reanchor);
+    const onFocus = () => { void reanchorNow(); };
+    const onPageShow = () => { void reanchorNow(); };
+    const onVis = () => document.visibilityState === "visible" && void reanchorNow();
+    window.addEventListener("focus", onFocus, true);
+    window.addEventListener("pageshow", onPageShow);
     document.addEventListener("visibilitychange", onVis);
     return () => {
-      window.removeEventListener("focus", reanchor, true);
-      window.removeEventListener("pageshow", reanchor);
+      window.removeEventListener("focus", onFocus, true);
+      window.removeEventListener("pageshow", onPageShow);
       document.removeEventListener("visibilitychange", onVis);
     };
     // include timing parameters to avoid stale predicted ends
-  }, [forceReanchor]);
+  }, [reanchorNow]);
 
   // Final "show" decision
   const untilShow = Math.max(
@@ -2745,8 +2762,9 @@ function useGameSnapshot() {
     persistCommitForFallback,
     kickLocalShow,
     commitFromReceipt,
-    forceReanchor,
+    reanchorNow,
     broadcastForceReanchor,
+    forceLeader,
   } as const;
 }
 const GameSnapshotContext = React.createContext<ReturnType<typeof useGameSnapshot> | null>(null);
@@ -2812,7 +2830,7 @@ function PostBoxInner() {
   const publicClient = usePublicClient();
   const qc = useQueryClient();
   const [toast, setToast] = React.useState("");
-  const { setQuiet } = useQuiet();
+  const { begin, forceOff } = useQuiet();
   const snap = useSnap();
 
   const { data: decimals } = useReadContract({
@@ -2871,7 +2889,8 @@ function PostBoxInner() {
       writeMaskUntil(MOD_MASK_KEY, 0);
       writeMaskUntil(NUKE_MASK_KEY, 0);
 
-      await runQuietly(setQuiet, async () => {
+      const endQuiet = begin(7000);
+      try {
         await ensureAllowanceThenSettle(
           publicClient,
           address as `0x${string}`,
@@ -2903,20 +2922,48 @@ function PostBoxInner() {
           mined = await publicClient!.getTransactionReceipt({ hash: txHash as `0x${string}` });
         } catch {}
 
+        let commitInfo: any = null;
         try {
-          await snap.commitFromReceipt(mined);
+          commitInfo = await snap.commitFromReceipt(mined);
         } catch { /* non-fatal */ }
 
-        // 3) Force a full reanchor and tell everyone
-        await snap.forceReanchor?.();
-        snap.broadcastForceReanchor?.();
-        setTimeout(() => snap.broadcastForceReanchor?.(), 250);
+        if (commitInfo) {
+          const nowSec = Math.floor(Date.now() / 1000);
+          const nowMs = Date.now();
+          const newIdStr = String(commitInfo.id ?? "");
+          let newId = 0n;
+          try { newId = newIdStr ? BigInt(newIdStr) : 0n; } catch { newId = 0n; }
+          const exposureEnd = Number(commitInfo.exposureEnd ?? 0);
+          const predictedGloryEnd = Number(commitInfo.predictedGloryEnd ?? 0);
+          const immUntil = Number(commitInfo.immUntil ?? 0);
+          if (newId && newId !== 0n && exposureEnd > 0) {
+            const commit = {
+              id: newIdStr,
+              start: Number(commitInfo.start ?? 0),
+              exposureEnd,
+              gloryEnd: predictedGloryEnd || undefined,
+              immEnd: immUntil || undefined,
+              rem: Math.max(0, exposureEnd - nowSec),
+              at: nowMs,
+            };
+            try { snap.adoptCommit(commit); } catch {}
+            snap.broadcastCommit(commit);
+            snap.persistCommitForFallback(commit);
+            snap.forceLeader(6000);
+            await snap.reanchorNow();
+            snap.broadcastForceReanchor();
+          }
+        }
 
         nudgeQueries(qc, [0, 500, 1500]);
         writeMaskUntil(GLORY_MASK_KEY, 0);
-      });
-      setText("");
-      setToast("Post confirmed ✨");
+        setText("");
+        setToast("Post confirmed ✨");
+      } finally {
+        endQuiet();
+        // Hard-clear in case wallet stays open or user cancels midway.
+        forceOff();
+      }
     } catch (e: any) {
       setToast(preflightError || tidyError(e));
     } finally {
@@ -2986,7 +3033,7 @@ function ReplaceBoxInner() {
   const publicClient = usePublicClient();
   const qc = useQueryClient();
   const [toast, setToast] = React.useState("");
-  const { setQuiet } = useQuiet();
+  const { begin, forceOff } = useQuiet();
   const snap = useSnap();
 
   // Live "Required now"
@@ -3062,7 +3109,8 @@ function ReplaceBoxInner() {
       writeMaskUntil(MOD_MASK_KEY, 0);
       writeMaskUntil(NUKE_MASK_KEY, 0);
 
-      await runQuietly(setQuiet, async () => {
+      const endQuiet = begin(7000);
+      try {
         await ensureAllowanceThenSettle(
           publicClient,
           address as `0x${string}`,
@@ -3094,19 +3142,46 @@ function ReplaceBoxInner() {
           mined = await publicClient!.getTransactionReceipt({ hash: h as `0x${string}` });
         } catch {}
 
+        let commitInfo: any = null;
         try {
-          await snap.commitFromReceipt(mined);
+          commitInfo = await snap.commitFromReceipt(mined);
         } catch {}
 
-        // 3) Force a full reanchor and tell everyone
-        await snap.forceReanchor?.();
-        snap.broadcastForceReanchor?.();
-        setTimeout(() => snap.broadcastForceReanchor?.(), 250);
+        if (commitInfo) {
+          const nowSec = Math.floor(Date.now() / 1000);
+          const nowMs = Date.now();
+          const newIdStr = String(commitInfo.id ?? "");
+          let newId = 0n;
+          try { newId = newIdStr ? BigInt(newIdStr) : 0n; } catch { newId = 0n; }
+          const exposureEnd = Number(commitInfo.exposureEnd ?? 0);
+          const predictedGloryEnd = Number(commitInfo.predictedGloryEnd ?? 0);
+          const immUntil = Number(commitInfo.immUntil ?? 0);
+          if (newId && newId !== 0n && exposureEnd > 0) {
+            const commit = {
+              id: newIdStr,
+              start: Number(commitInfo.start ?? 0),
+              exposureEnd,
+              gloryEnd: predictedGloryEnd || undefined,
+              immEnd: immUntil || undefined,
+              rem: Math.max(0, exposureEnd - nowSec),
+              at: nowMs,
+            };
+            try { snap.adoptCommit(commit); } catch {}
+            snap.broadcastCommit(commit);
+            snap.persistCommitForFallback(commit);
+            snap.forceLeader(6000);
+            await snap.reanchorNow();
+            snap.broadcastForceReanchor();
+          }
+        }
 
         nudgeQueries(qc, [0, 500, 1500]);
         writeMaskUntil(GLORY_MASK_KEY, 0);
-      });
-      setToast("Replacement confirmed ✨");
+        setToast("Replacement confirmed ✨");
+      } finally {
+        endQuiet();
+        forceOff();
+      }
     } catch (e: any) {
       setToast(preflightError || tidyError(e));
     } finally {
