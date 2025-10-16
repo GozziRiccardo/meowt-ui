@@ -2464,15 +2464,26 @@ function PostBox() {
   const isConnected = useUiConnected();
   const snap = useSnap();
 
+  // Don’t render while we’re still settling/booting or while the active card is visible.
   if (!snap.rehydrationComplete) return null;
   if (snap.loading) return null;
-
-  // If we're rendering the active card at all, don't render the Post UI.
   if (snap.show) return null;
 
-  // Only show Post UI when there's truly no active message on-chain.
-  const hasId = Boolean(snap.id && snap.id !== 0n);
-  if (!hasId) {
+  // WINDOWS / LOCKS STATE
+  const rem = Number(snap.rem ?? 0n); // exposure time left
+  const glory = Number(snap.gloryRem ?? 0); // glory time left
+  const lockLeft = Number((snap as any)?.lockLeft ?? 0); // immunity/boost/glory lock seconds
+
+  // Freeze window (post-glory) derived from predicted end + freeze seconds
+  const gloryEnd = Number((snap as any)?.gloryPredictedEnd ?? 0);
+  const freezeSecs = Number((snap as any)?.winFreeze ?? 0);
+  const nowSec = Number((snap as any)?.nowSec ?? Math.floor(Date.now() / 1000));
+  const freezeActive = gloryEnd > 0 && nowSec < gloryEnd + freezeSecs;
+
+  // If ANY timer/lock/freeze is still active, hide the post box.
+  const windowsOpen = rem > 0 || glory > 0 || lockLeft > 0 || freezeActive;
+
+  if (!windowsOpen) {
     return isConnected ? <PostBoxInner /> : null;
   }
   return null;
