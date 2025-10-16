@@ -1455,12 +1455,22 @@ function useGameSnapshot() {
   const cooldownEndRef = React.useRef<number>(0);
   const immEndRef = React.useRef<number>(0);
   const showUntilRef = React.useRef<number>(0);
+  const localShowOverrideUntilRef = React.useRef<number>(0);
   const idHoldUntilRef = React.useRef<number>(0);
   const lastStartRef = React.useRef<number>(0);
   const lastContentKeyRef = React.useRef<string>("");
   const gloryGuardUntilRef = React.useRef<number>(0); // stores chain *seconds*
   const gloryEntryLatchRef = React.useRef<boolean>(false);
   (globalThis as any).__meowtGloryEntryLatchRef = gloryEntryLatchRef;
+
+  // Lets the posting tab force "show" briefly even if activeMessageId lags
+  function kickLocalShow(seconds = 8) {
+    const nowS = Math.floor(Date.now() / 1000);
+    localShowOverrideUntilRef.current = Math.max(
+      localShowOverrideUntilRef.current,
+      nowS + Math.max(1, seconds),
+    );
+  }
 
   // Do not anchor from gloryRemaining while the *current* message is still in exposure,
   // or while our post-guard is active. This prevents early jumps into glory at post time.
@@ -1775,6 +1785,124 @@ function useGameSnapshot() {
       localStorage.setItem(WINDOW_COMMIT_KEY, JSON.stringify(s));
     } catch {}
   }, []);
+
+  async function commitFromReceipt(
+    receipt: { blockNumber?: bigint } | null | undefined,
+    opts?: { preferBlockReads?: boolean }
+  ) {
+    const preferBlockReads = opts?.preferBlockReads !== false;
+    if (!publicClient || !receipt?.blockNumber) return null;
+
+    const atBlock = receipt.blockNumber;
+    const blockNumber = preferBlockReads ? atBlock : undefined;
+
+    // Read at the exact block the tx was mined in to avoid RPC "latest" lag
+    const [idAtBlock, wins, endAtBlock] = await Promise.all([
+      publicClient
+        .readContract({
+          address: GAME as `0x${string}`,
+          abi: GAME_ABI,
+          functionName: "activeMessageId",
+          blockNumber,
+        })
+        .catch(() => 0n),
+      publicClient
+        .readContract({
+          address: GAME as `0x${string}`,
+          abi: GAME_ABI,
+          functionName: "windows",
+          blockNumber,
+        })
+        .catch(() => null),
+      publicClient
+        .readContract({
+          address: GAME as `0x${string}`,
+          abi: GAME_ABI,
+          functionName: "endTime",
+          args: [lastIdRef.current && lastIdRef.current !== 0n ? lastIdRef.current : 0n],
+          blockNumber,
+        })
+        .catch(() => 0n),
+    ]);
+
+    const id = (idAtBlock ?? 0n) as bigint;
+    if (!id || id === 0n) return null;
+
+    // Re-read endTime for the discovered id (guard: some nodes ignore args when id=0)
+    const endBn = await publicClient
+      .readContract({
+        address: GAME as `0x${string}`,
+        abi: GAME_ABI,
+        functionName: "endTime",
+        args: [id],
+        blockNumber,
+      })
+      .catch(() => endAtBlock ?? 0n);
+
+    // Try to read message to get startTime (nice-to-have; we’ll still work without it)
+    const msg = await publicClient
+      .readContract({
+        address: GAME as `0x${string}`,
+        abi: GAME_ABI,
+        functionName: "messages",
+        args: [id],
+        blockNumber,
+      })
+      .catch(() => null as any);
+
+    const startRaw = (msg as any)?.startTime ?? (msg as any)?.[3] ?? 0n;
+    const start = Number(startRaw ?? 0n);
+    const exposureEnd = Number((endBn ?? 0n) as bigint);
+
+    const winPostImm = Number((wins as any)?.[0] ?? 0n);
+    const winGlory = Number((wins as any)?.[1] ?? 0n);
+
+    const predictedGloryEnd = exposureEnd > 0 && winGlory > 0 ? exposureEnd + winGlory : 0;
+    const nowS = Math.floor(Date.now() / 1000);
+    const immUntil = winPostImm > 0 ? nowS + winPostImm : 0;
+
+    const commit = {
+      id: String(id),
+      start,
+      exposureEnd,
+      gloryEnd: predictedGloryEnd || undefined,
+      immEnd: immUntil || undefined,
+      rem: Math.max(0, exposureEnd > 0 ? exposureEnd - nowS : 0),
+      at: Date.now(),
+    };
+
+    // Seed refs immediately on the posting tab
+    if (id && id !== 0n) {
+      exposureEndRef.current = Math.max(exposureEndRef.current, exposureEnd || 0);
+      if (predictedGloryEnd > 0) {
+        gloryEndRef.current = Math.max(gloryEndRef.current, predictedGloryEnd);
+        showUntilRef.current = Math.max(showUntilRef.current, predictedGloryEnd);
+      }
+      if (immUntil > 0) {
+        immEndRef.current = Math.max(immEndRef.current, immUntil);
+        gloryGuardUntilRef.current = Math.max(gloryGuardUntilRef.current, immUntil);
+        try { writeMaskUntil(IMMUNITY_KEY, immUntil, { messageId: id }); } catch {}
+      }
+
+      // Anchor chain "now" from rem/exposureEnd
+      const anchorEpoch = exposureEnd > 0 && commit.rem >= 0 ? exposureEnd - commit.rem : 0;
+      if (anchorEpoch > 0) {
+        chainNowRef.current = { epoch: anchorEpoch, fetchedAt: Date.now() };
+        setNowSec((prev) => Math.max(prev, computeChainNow()));
+        broadcastAnchor(anchorEpoch);
+      }
+
+      // Persist
+      writeWindowTimes(id, exposureEnd || 0, predictedGloryEnd || 0, immUntil || 0);
+    }
+
+    // Share to other tabs and store fallback
+    try { adoptCommit(commit); } catch {}
+    broadcastCommit(commit);
+    persistCommitForFallback(commit);
+
+    return { id, exposureEnd, predictedGloryEnd, immUntil };
+  }
 
   const lastAnchorFromPeer = React.useRef<number>(0);
   React.useEffect(() => {
@@ -2526,9 +2654,10 @@ function useGameSnapshot() {
   );
   const liveProofNow =
     Number(remChainBN ?? 0n) > 0 || Number(gloryRemChainBN ?? 0n) > 0;
+  const localOverrideActive = nowSec < localShowOverrideUntilRef.current;
   // If we have live proof, allow showing even before batched `raw` settles.
   const baseShow =
-    hasId &&
+    (hasId || localOverrideActive) &&
     (
       nowSec < untilShow + SHOW_CUSHION ||
       liveProofNow ||
@@ -2614,6 +2743,8 @@ function useGameSnapshot() {
     adoptCommit,
     broadcastCommit,
     persistCommitForFallback,
+    kickLocalShow,
+    commitFromReceipt,
     forceReanchor,
     broadcastForceReanchor,
   } as const;
@@ -2763,100 +2894,23 @@ function PostBoxInner() {
 
         await confirmThenRefresh(txHash);
 
-        // Proactively pull the new id, kick queries, and clear any latent glory mask
+        // 1) Kick local show immediately (UI safety net)
+        snap.kickLocalShow(8);
+
+        // 2) Use the receipt’s block to make a deterministic snapshot
+        let mined: any = null;
         try {
-          const [newId, wins] = await Promise.all([
-            publicClient
-              .readContract({
-                address: GAME as `0x${string}`,
-                abi: GAME_ABI,
-                functionName: "activeMessageId",
-              })
-              .catch(() => 0n),
-            publicClient
-              .readContract({
-                address: GAME as `0x${string}`,
-                abi: GAME_ABI,
-                functionName: "windows",
-              })
-              .catch(() => null),
-          ]);
-
-          const immSecs = Number((wins as any)?.[0] ?? 0n);
-          const winGlorySecs = Number((wins as any)?.[1] ?? 0n);
-          const nowMs = Date.now();
-          const nowSec = Math.floor(nowMs / 1000);
-          const immUntil = immSecs > 0 ? nowSec + immSecs : 0;
-          let exposureEnd = 0;
-          let predictedGloryEnd = 0;
-          let start = 0;
-
-          if (newId && newId !== 0n) {
-            if (immUntil > 0) {
-              try { writeMaskUntil(IMMUNITY_KEY, immUntil, { messageId: newId }); } catch {}
-            }
-
-            try {
-              // Seed exposure & glory ends for the new id right away
-              const [endBn, msg] = await Promise.all([
-                publicClient
-                  .readContract({
-                    address: GAME as `0x${string}`,
-                    abi: GAME_ABI,
-                    functionName: "endTime",
-                    args: [newId as bigint],
-                  })
-                  .catch(() => 0n),
-                publicClient
-                  .readContract({
-                    address: GAME as `0x${string}`,
-                    abi: GAME_ABI,
-                    functionName: "messages",
-                    args: [newId as bigint],
-                  })
-                  .catch(() => null as any),
-              ]);
-
-              exposureEnd = Number(endBn ?? 0n);
-              const rawStart = (msg as any)?.startTime ?? (msg as any)?.[3] ?? 0n;
-              const startCandidate = Number((rawStart ?? 0n) as bigint);
-              start = Number.isFinite(startCandidate)
-                ? Math.max(0, Math.floor(startCandidate))
-                : 0;
-              predictedGloryEnd =
-                exposureEnd > 0 && winGlorySecs > 0
-                  ? exposureEnd + winGlorySecs
-                  : 0;
-
-              if (exposureEnd > 0) {
-                writeWindowTimes(
-                  newId as bigint,
-                  exposureEnd,
-                  predictedGloryEnd,
-                  immUntil
-                );
-              }
-            } catch { /* best effort only */ }
-
-            if (newId && newId !== 0n && exposureEnd > 0) {
-              const commit = {
-                id: String(newId),
-                start,
-                exposureEnd,
-                gloryEnd: predictedGloryEnd || undefined,
-                immEnd: immUntil || undefined,
-                rem: Math.max(0, exposureEnd - nowSec),
-                at: nowMs,
-              };
-              try { snap.adoptCommit(commit); } catch {}
-              snap.broadcastCommit(commit);
-              snap.persistCommitForFallback(commit);
-              await snap.forceReanchor();
-              snap.broadcastForceReanchor();
-              setTimeout(() => snap.broadcastForceReanchor(), 250);
-            }
-          }
+          mined = await publicClient!.getTransactionReceipt({ hash: txHash as `0x${string}` });
         } catch {}
+
+        try {
+          await snap.commitFromReceipt(mined);
+        } catch { /* non-fatal */ }
+
+        // 3) Force a full reanchor and tell everyone
+        await snap.forceReanchor?.();
+        snap.broadcastForceReanchor?.();
+        setTimeout(() => snap.broadcastForceReanchor?.(), 250);
 
         nudgeQueries(qc, [0, 500, 1500]);
         writeMaskUntil(GLORY_MASK_KEY, 0);
@@ -3031,97 +3085,23 @@ function ReplaceBoxInner() {
 
         await confirmThenRefresh(h);
 
-        // Proactively pull the new id, kick queries, and clear any latent glory mask
+        // 1) Kick local show immediately (UI safety net)
+        snap.kickLocalShow(8);
+
+        // 2) Use the receipt’s block to make a deterministic snapshot
+        let mined: any = null;
         try {
-          const idNow = await publicClient
-            .readContract({
-              address: GAME as `0x${string}`,
-              abi: GAME_ABI,
-              functionName: "activeMessageId",
-            })
-            .catch(() => 0n);
+          mined = await publicClient!.getTransactionReceipt({ hash: h as `0x${string}` });
+        } catch {}
 
-          const [endBn, wins2] = await Promise.all([
-            idNow && idNow !== 0n
-              ? publicClient
-                  .readContract({
-                    address: GAME as `0x${string}`,
-                    abi: GAME_ABI,
-                    functionName: "endTime",
-                    args: [idNow as bigint],
-                  })
-                  .catch(() => 0n)
-              : Promise.resolve(0n),
-            publicClient
-              .readContract({
-                address: GAME as `0x${string}`,
-                abi: GAME_ABI,
-                functionName: "windows",
-              })
-              .catch(() => null),
-          ]);
+        try {
+          await snap.commitFromReceipt(mined);
+        } catch {}
 
-          const exposureEnd = Number(endBn ?? 0n);
-          const winGlorySecs = Number((wins2 as any)?.[1] ?? 0n);
-          const immSecs = Number((wins2 as any)?.[0] ?? 0n);
-          const nowMs = Date.now();
-          const nowSec = Math.floor(nowMs / 1000);
-          const predictedGloryEnd =
-            exposureEnd > 0 && winGlorySecs > 0
-              ? exposureEnd + winGlorySecs
-              : 0;
-          const immUntil = nowSec + Math.max(0, immSecs);
-          let start = 0;
-
-          if (idNow && idNow !== 0n) {
-            if (immUntil > 0) {
-              try {
-                writeMaskUntil(IMMUNITY_KEY, immUntil, { messageId: idNow as bigint });
-              } catch {}
-            }
-
-            try {
-              const msg2 = await publicClient
-                .readContract({
-                  address: GAME as `0x${string}`,
-                  abi: GAME_ABI,
-                  functionName: "messages",
-                  args: [idNow as bigint],
-                })
-                .catch(() => null as any);
-              const rawStart = (msg2 as any)?.startTime ?? (msg2 as any)?.[3] ?? 0n;
-              const startCandidate = Number((rawStart ?? 0n) as bigint);
-              start = Number.isFinite(startCandidate)
-                ? Math.max(0, Math.floor(startCandidate))
-                : 0;
-            } catch {}
-          }
-
-          if (idNow && idNow !== 0n && exposureEnd > 0) {
-            writeWindowTimes(
-              idNow as bigint,
-              exposureEnd,
-              predictedGloryEnd,
-              immUntil
-            );
-
-            const commit = {
-              id: String(idNow),
-              start,
-              exposureEnd,
-              gloryEnd: predictedGloryEnd || undefined,
-              immEnd: immUntil || undefined,
-              rem: Math.max(0, exposureEnd - nowSec),
-              at: nowMs,
-            };
-            try { snap.adoptCommit(commit); } catch {}
-            snap.broadcastCommit(commit);
-            snap.persistCommitForFallback(commit);
-            await snap.forceReanchor();
-            snap.broadcastForceReanchor();
-            setTimeout(() => snap.broadcastForceReanchor(), 250);
-          }
-        } catch { /* best effort */ }
+        // 3) Force a full reanchor and tell everyone
+        await snap.forceReanchor?.();
+        snap.broadcastForceReanchor?.();
+        setTimeout(() => snap.broadcastForceReanchor?.(), 250);
 
         nudgeQueries(qc, [0, 500, 1500]);
         writeMaskUntil(GLORY_MASK_KEY, 0);
