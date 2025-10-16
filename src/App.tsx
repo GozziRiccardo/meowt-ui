@@ -1184,6 +1184,7 @@ function useGameSnapshot() {
   // Keep the correct layout "stuck" right after a commit (post/replace).
   const STICK_AFTER_COMMIT_SECS = 8; // pin the correct layout briefly after a new message appears
   const CLICK_GRACE_STICK_SECS = 6; // extend stick briefly when user interacts during early window
+  const STICK_MAX_LIFETIME_SECS = 22; // ensure we eventually release
 
   // Detect BroadcastChannel support (gate leader mode)
   const bcSupported =
@@ -1335,23 +1336,34 @@ function useGameSnapshot() {
   // --- Commit "stick" so UI can't regress during early seconds ---
   const commitStickUntilRef = React.useRef<number>(0);
   const commitStickIdRef = React.useRef<bigint>(0n);
+  const commitStickStartRef = React.useRef<number>(0);
   const armCommitStick = React.useCallback((id: bigint, secs: number) => {
     if (!id || id === 0n || !Number.isFinite(secs) || secs <= 0) return;
-    const nowS = Math.floor(Date.now() / 1000);
     commitStickIdRef.current = id;
-    commitStickUntilRef.current = Math.max(
-      commitStickUntilRef.current,
-      nowS + Math.floor(secs),
-    );
+    const nowS = Math.floor(Date.now() / 1000);
+    if (!commitStickStartRef.current) commitStickStartRef.current = nowS;
+    const maxUntil = commitStickStartRef.current + STICK_MAX_LIFETIME_SECS;
+    const desired = Math.min(maxUntil, nowS + Math.floor(secs));
+    commitStickUntilRef.current = Math.max(commitStickUntilRef.current, desired);
   }, []);
   const extendCommitStick = React.useCallback((secs: number) => {
     if (!Number.isFinite(secs) || secs <= 0) return;
     const nowS = Math.floor(Date.now() / 1000);
-    commitStickUntilRef.current = Math.max(
-      commitStickUntilRef.current,
-      nowS + Math.floor(secs),
-    );
+    if (!commitStickStartRef.current) commitStickStartRef.current = nowS;
+    const maxUntil = commitStickStartRef.current + STICK_MAX_LIFETIME_SECS;
+    const desired = Math.min(maxUntil, nowS + Math.floor(secs));
+    commitStickUntilRef.current = Math.max(commitStickUntilRef.current, desired);
   }, []);
+  React.useEffect(() => {
+    const onDown = () => {
+      const nowS = Math.floor(Date.now() / 1000);
+      if (nowS < commitStickUntilRef.current) {
+        extendCommitStick(CLICK_GRACE_STICK_SECS);
+      }
+    };
+    window.addEventListener("pointerdown", onDown, { capture: true, passive: true });
+    return () => window.removeEventListener("pointerdown", onDown, { capture: true } as any);
+  }, [extendCommitStick, CLICK_GRACE_STICK_SECS]);
   // Refs and latches
   const lastIdRef = React.useRef<bigint>(0n);
   const exposureEndRef = React.useRef<number>(0);
@@ -1369,8 +1381,8 @@ function useGameSnapshot() {
   (globalThis as any).__meowtGloryEntryLatchRef = gloryEntryLatchRef;
 
   const stickOkId =
-    (hasId && idBig !== 0n && commitStickIdRef.current === idBig) ||
-    (!hasId && lastIdRef.current && lastIdRef.current === commitStickIdRef.current);
+    (idBig && idBig !== 0n && commitStickIdRef.current === idBig) ||
+    (!idBig && lastIdRef.current && lastIdRef.current === commitStickIdRef.current);
   const stickActive =
     stickOkId && Math.floor(Date.now() / 1000) < commitStickUntilRef.current;
 
@@ -1399,7 +1411,7 @@ function useGameSnapshot() {
   });
 
   // -------- Live reads --------
-  const pollEnabled = hasId && leaderActive && !stickActive;
+  const pollEnabled = hasId && leaderActive && !quiet && !stickActive;
   const { data: remChainBN } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
@@ -1822,7 +1834,8 @@ function useGameSnapshot() {
       // For a few seconds, the author tab is authoritative
       armCommitLatch(8);
       nudgeQueries(qc, [0, 200, 800]);
-      // Pin the layout immediately after a commit so it can't regress
+      // Reset stick lifetime window and pin the layout immediately after a commit
+      commitStickStartRef.current = 0;
       armCommitStick(snapId, STICK_AFTER_COMMIT_SECS);
     },
     [
@@ -1832,6 +1845,7 @@ function useGameSnapshot() {
       broadcastAnchor,
       armCommitLatch,
       armCommitStick,
+      commitStickStartRef,
     ]
   );
 
@@ -2614,14 +2628,17 @@ function useGameSnapshot() {
     boostEndRef.current > 0;
 
   const readyToShowLocks =
-    rehydrationComplete && (hasValidAnchor || !hasId || anyWindowKnown);
+    (rehydrationComplete || stickActive) &&
+    (stickActive || hasValidAnchor || !hasId || anyWindowKnown);
 
   // Prefer glory while active; otherwise boost can override immunity/guard.
   let lockKind: "boost" | "glory" | "immunity" | "none" = "none";
   let lockLeft = 0;
   if (readyToShowLocks) {
-    // Glory takes precedence whenever the current message is in glory.
-    if (inGlory && gRemLive && gloryLeftUi > 0) {
+    if (stickActive) {
+      lockKind = "immunity";
+      lockLeft = Math.max(0, immEndRef.current - nowSec);
+    } else if (inGlory && gRemLive && gloryLeftUi > 0) {
       // Enter glory ONLY after exposure for this id is anchored and passed.
       lockKind = "glory";
       lockLeft = gloryLeftUi;
@@ -2642,7 +2659,7 @@ function useGameSnapshot() {
 
   // If there’s no active message id, never report any lock state.
   // This prevents the PostBox from being hidden during idle/no-id.
-  if (!hasId) {
+  if (!hasId && !stickActive) {
     lockKind = "none";
     lockLeft = 0;
   }
@@ -2720,7 +2737,7 @@ function useGameSnapshot() {
   // stickActive (computed earlier) keeps the freshly committed card visible during hard commits.
   // If we have live proof, allow showing even before batched `raw` settles.
   const baseShow =
-    (hasId || localOverrideActive) &&
+    (hasId || localOverrideActive || stickActive) &&
     (
       nowSec < untilShow + SHOW_CUSHION ||
       liveProofNow ||
@@ -2728,7 +2745,7 @@ function useGameSnapshot() {
     );
   // While the optimistic hold is active, allow the UI to persist without fresh raw data.
   const optimisticHoldActive =
-    (hasId || localOverrideActive) && nowSec < untilShow + SHOW_CUSHION;
+    (hasId || localOverrideActive || stickActive) && nowSec < untilShow + SHOW_CUSHION;
   const rawReadyEnough =
     optimisticHoldActive || stickActive || commitLatchActive()
       ? true
@@ -2817,6 +2834,8 @@ function useGameSnapshot() {
     persistCommitForFallback,
     kickLocalShow,
     extendCommitStick,
+    CLICK_GRACE_STICK_SECS,
+    STICK_AFTER_COMMIT_SECS,
     commitFromReceipt,
     reanchorNow,
     broadcastForceReanchor,
@@ -3005,7 +3024,11 @@ function PostBoxInner() {
             try { snap.adoptCommit(commit); } catch {}
             snap.broadcastCommit(commit);
             snap.persistCommitForFallback(commit);
-            try { (snap as any)?.extendCommitStick?.(8); } catch {}
+            try {
+              (snap as any)?.extendCommitStick?.(
+                (snap as any)?.STICK_AFTER_COMMIT_SECS ?? 8,
+              );
+            } catch {}
             snap.forceLeader(6000);
             await snap.reanchorNow();
             snap.broadcastForceReanchor();
@@ -3226,7 +3249,11 @@ function ReplaceBoxInner() {
             try { snap.adoptCommit(commit); } catch {}
             snap.broadcastCommit(commit);
             snap.persistCommitForFallback(commit);
-            try { (snap as any)?.extendCommitStick?.(8); } catch {}
+            try {
+              (snap as any)?.extendCommitStick?.(
+                (snap as any)?.STICK_AFTER_COMMIT_SECS ?? 8,
+              );
+            } catch {}
             snap.forceLeader(6000);
             await snap.reanchorNow();
             snap.broadcastForceReanchor();
@@ -4204,7 +4231,11 @@ function ActiveCard() {
     let preflightError: string | null = null;
     try {
       if (!canVote || !publicClient || !address) return;
-      try { (snap as any)?.extendCommitStick?.(6); } catch {}
+      try {
+        (snap as any)?.extendCommitStick?.(
+          (snap as any)?.CLICK_GRACE_STICK_SECS ?? 6,
+        );
+      } catch {}
       // Preflight network switch
       await ensureOnTargetChain().catch((e: any) => {
         preflightError = String(e?.message || e);
@@ -4262,7 +4293,11 @@ function ActiveCard() {
     let preflightError: string | null = null;
     try {
       if (!canVote || !publicClient || !address) return;
-      try { (snap as any)?.extendCommitStick?.(6); } catch {}
+      try {
+        (snap as any)?.extendCommitStick?.(
+          (snap as any)?.CLICK_GRACE_STICK_SECS ?? 6,
+        );
+      } catch {}
       // Preflight network switch
       await ensureOnTargetChain().catch((e: any) => {
         preflightError = String(e?.message || e);
@@ -4332,7 +4367,11 @@ function ActiveCard() {
       });
       if (!isConnected || !publicClient || !address) return;
       if (boostActive || boostCooldown || glorySec > 0) return;
-      try { (snap as any)?.extendCommitStick?.(6); } catch {}
+      try {
+        (snap as any)?.extendCommitStick?.(
+          (snap as any)?.CLICK_GRACE_STICK_SECS ?? 6,
+        );
+      } catch {}
       setBoostBusy(true);
 
       // Re-read cost (live) as a safety net
