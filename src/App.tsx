@@ -689,28 +689,21 @@ function two(x?: number) { return typeof x === "number" && Number.isFinite(x) ? 
 
 // -------------------- Permanent expiration counter (centered above message) --------------------
 /**
- * Always-visible expiration countdown.
- * - During immunity we highlight the immunity timer in red.
- * - Otherwise we display the exposure countdown with the classic styling.
+ * Always-visible expiration countdown (only tracks exposure/expiration time).
+ * - Consumes `snap.rem` and renders "Time left: M:SS" next to the time-mascot.
  * - Renders above the message box, centered.
  */
 function PermanentTimerBar() {
   const snap = useSnap();
-  const immLeft = Number((snap as any)?.immLeft ?? 0);
-  const lockKind = (snap as any)?.lockKind as "boost" | "glory" | "immunity" | "none" | undefined;
-  const isImmunity = lockKind === "immunity" && immLeft > 0;
   // `rem` is the remaining exposure/expiration seconds returned by GameSnapshot
   const remRaw = (snap as any)?.rem ?? 0n;
   const rem = Number(remRaw);
-  const displayTime = isImmunity ? immLeft : rem;
 
-  if (!Number.isFinite(displayTime) || displayTime <= 0) return null;
+  if (!Number.isFinite(rem) || rem <= 0) return null;
 
   const chipClasses = [
     "px-4 py-2 rounded-full shadow flex items-center gap-3",
-    isImmunity
-      ? "bg-red-600 text-white ring-1 ring-red-700/40"
-      : "bg-rose-600 text-white ring-1 ring-rose-700/40",
+    "bg-rose-600 text-white ring-1 ring-rose-700/40",
     "text-lg md:text-xl font-extrabold tracking-wide",
   ].join(" ");
 
@@ -721,7 +714,7 @@ function PermanentTimerBar() {
         className="flex items-center gap-4"
         role="status"
         aria-live="polite"
-        aria-label={`Time left: ${fmtClock(displayTime)}`}
+        aria-label={`Time left: ${fmtClock(rem)}`}
       >
         <img
           src="/illustrations/time-mascot.png"
@@ -730,7 +723,7 @@ function PermanentTimerBar() {
           draggable={false}
         />
         <div className={chipClasses}>
-          <span className="tabular-nums">{fmtClock(displayTime)}</span>
+          <span className="tabular-nums">{fmtClock(rem)}</span>
         </div>
       </div>
     </div>
@@ -970,7 +963,6 @@ function MessagePreview({
   const boostSeconds = Math.max(0, Math.floor((boostedRem ?? 0) - tick));
   const isBoost = boostSeconds > 0;
   const isGlory = lockKind === "glory" && left > 0;
-  const isImmunity = lockKind === "immunity" && (lockLeft ?? 0) > 0;
   const locked = lockKind !== "none" && left > 0;
   // If a boost is active, the badge should reflect the boost time even during immunity.
   const timerLeft = Number.isFinite(timerOverride) && (timerOverride ?? 0) > 0
@@ -1050,7 +1042,7 @@ function MessagePreview({
 
   const topPad = (isBoost || isGlory) ? "pt-[clamp(64px,12vw,112px)]" : "";
   const bottomPad = (isBoost || isGlory) ? "pb-[clamp(24px,4vw,40px)]" : "";
-  const ringColor = isGlory ? "!ring-amber-500" : ((isImmunity || locked) ? "!ring-red-600" : "");
+  const ringColor = isGlory ? "!ring-amber-500" : (locked ? "!ring-red-600" : "");
   const topImg = isGlory ? GLORY_IMG : BOOST_IMG;
   const likeEnabled = canVote;
   const dislikeEnabled = canVote && !isGlory;
