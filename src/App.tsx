@@ -1174,7 +1174,8 @@ function WaitingCard() {
 function useGameSnapshot() {
   const INIT_HOLD_MS = 400;
   const ID_CHANGE_HOLD_MS = 700;
-  const OPTIMISTIC_SHOW_MS = 1100;
+  // Give more time for the posting tab to seed/persist windows & anchors
+  const OPTIMISTIC_SHOW_MS = 6000;
   const ID_PENDING_MAX_HOLD_MS = 1800;
   const SHOW_CUSHION = 1;
   const PRE_GLORY_GUARD_SECS = 3;
@@ -2151,11 +2152,9 @@ function useGameSnapshot() {
     if (!hasId) return;
     if (lastIdRef.current !== idBig) {
       lastIdRef.current = idBig;
-      exposureEndRef.current = 0;
-      gloryEndRef.current = 0;
-      boostEndRef.current = 0;
-      cooldownEndRef.current = 0;
-      immEndRef.current = 0;
+      // IMPORTANT: don't wipe window refs here anymore.
+      // The posting tab (adoptCommit/reanchor) often seeds correct ends just before this effect runs.
+      // We only reset latches that are purely heuristic.
       lastStartRef.current = 0;
       lastContentKeyRef.current = "";
       gloryEntryLatchRef.current = false;
