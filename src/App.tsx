@@ -2124,7 +2124,14 @@ function useGameSnapshot() {
 
   const hasValidAnchor =
     chainNowRef.current.epoch > 0 && chainNowRef.current.fetchedAt > 0;
-  const readyToShowLocks = rehydrationComplete && (hasValidAnchor || !hasId);
+  const anyWindowKnown =
+    immEndRef.current > 0 ||
+    exposureEndRef.current > 0 ||
+    gloryEndRef.current > 0 ||
+    boostEndRef.current > 0;
+
+  const readyToShowLocks =
+    rehydrationComplete && (hasValidAnchor || !hasId || anyWindowKnown);
 
   // Prefer glory while active; otherwise boost can override immunity/guard.
   let lockKind: "boost" | "glory" | "immunity" | "none" = "none";
@@ -2592,9 +2599,41 @@ function PostBoxInner() {
           ]);
 
           const immSecs = Number((wins as any)?.[0] ?? 0n);
-          if (newId && newId !== 0n && immSecs > 0) {
-            const immUntil = Math.floor(Date.now() / 1000) + immSecs;
-            try { writeMaskUntil(IMMUNITY_KEY, immUntil, { messageId: newId }); } catch {}
+          const winGlorySecs = Number((wins as any)?.[1] ?? 0n);
+          const immUntil =
+            immSecs > 0 ? Math.floor(Date.now() / 1000) + immSecs : 0;
+
+          if (newId && newId !== 0n) {
+            if (immUntil > 0) {
+              try { writeMaskUntil(IMMUNITY_KEY, immUntil, { messageId: newId }); } catch {}
+            }
+
+            try {
+              // Seed exposure & glory ends for the new id right away
+              const endBn = await publicClient
+                .readContract({
+                  address: GAME as `0x${string}`,
+                  abi: GAME_ABI,
+                  functionName: "endTime",
+                  args: [newId as bigint],
+                })
+                .catch(() => 0n);
+
+              const exposureEnd = Number(endBn ?? 0n);
+              const predictedGloryEnd =
+                exposureEnd > 0 && winGlorySecs > 0
+                  ? exposureEnd + winGlorySecs
+                  : 0;
+
+              if (exposureEnd > 0) {
+                writeWindowTimes(
+                  newId as bigint,
+                  exposureEnd,
+                  predictedGloryEnd,
+                  immUntil
+                );
+              }
+            } catch { /* best effort only */ }
           }
         } catch {}
 
@@ -2763,12 +2802,57 @@ function ReplaceBoxInner() {
 
         // Proactively pull the new id, kick queries, and clear any latent glory mask
         try {
-          await publicClient.readContract({
-            address: GAME as `0x${string}`,
-            abi: GAME_ABI,
-            functionName: "activeMessageId",
-          });
-        } catch {}
+          const idNow = await publicClient
+            .readContract({
+              address: GAME as `0x${string}`,
+              abi: GAME_ABI,
+              functionName: "activeMessageId",
+            })
+            .catch(() => 0n);
+
+          const [endBn, wins2] = await Promise.all([
+            idNow && idNow !== 0n
+              ? publicClient
+                  .readContract({
+                    address: GAME as `0x${string}`,
+                    abi: GAME_ABI,
+                    functionName: "endTime",
+                    args: [idNow as bigint],
+                  })
+                  .catch(() => 0n)
+              : Promise.resolve(0n),
+            publicClient
+              .readContract({
+                address: GAME as `0x${string}`,
+                abi: GAME_ABI,
+                functionName: "windows",
+              })
+              .catch(() => null),
+          ]);
+
+          const exposureEnd = Number(endBn ?? 0n);
+          const winGlorySecs = Number((wins2 as any)?.[1] ?? 0n);
+          const immSecs = Number((wins2 as any)?.[0] ?? 0n);
+          const predictedGloryEnd =
+            exposureEnd > 0 && winGlorySecs > 0
+              ? exposureEnd + winGlorySecs
+              : 0;
+
+          const immUntil =
+            Math.floor(Date.now() / 1000) + Math.max(0, immSecs);
+
+          if (idNow && idNow !== 0n && exposureEnd > 0) {
+            writeWindowTimes(
+              idNow as bigint,
+              exposureEnd,
+              predictedGloryEnd,
+              immUntil
+            );
+            try {
+              writeMaskUntil(IMMUNITY_KEY, immUntil, { messageId: idNow as bigint });
+            } catch {}
+          }
+        } catch { /* best effort */ }
 
         nudgeQueries(qc, [0, 500, 1500]);
         writeMaskUntil(GLORY_MASK_KEY, 0);
