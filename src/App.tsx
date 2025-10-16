@@ -1312,6 +1312,11 @@ function useGameSnapshot() {
   const waitingForId = idPendingHoldActive || zeroIdGraceActive;
   const hasId = typeof id === "bigint" && id !== 0n;
   const idBig = hasId ? (id as bigint) : 0n;
+  const commitLatchUntilRef = React.useRef<number>(0);
+  const commitLatchActive = React.useCallback(
+    () => Math.floor(Date.now() / 1000) < commitLatchUntilRef.current,
+    [],
+  );
 
   // -------- Batched reads --------
   const { data: raw, isFetching: rawFetching } = useReadContracts({
@@ -1338,13 +1343,14 @@ function useGameSnapshot() {
   });
 
   // -------- Live reads --------
+  const pollEnabled = hasId && (!quiet || commitLatchActive()) && isLeader;
   const { data: remChainBN } = useReadContract({
     address: GAME as `0x${string}`,
     abi: GAME_ABI,
     functionName: "remainingSeconds",
     args: [idBig],
     query: {
-      enabled: hasId && !quiet && isLeader,
+      enabled: pollEnabled,
       staleTime: 0,
       // IMPORTANT: on focus, fetch immediately so the tab "catches up"
       refetchOnWindowFocus: true,
@@ -1357,7 +1363,7 @@ function useGameSnapshot() {
     abi: GAME_ABI,
     functionName: "gloryRemaining",
     query: {
-      enabled: hasId && !quiet && isLeader,
+      enabled: pollEnabled,
       staleTime: 0,
       refetchOnWindowFocus: true,
       refetchInterval: 2500,
@@ -1373,7 +1379,7 @@ function useGameSnapshot() {
     abi: GAME_ABI,
     functionName: "boostedRemaining",
     query: {
-      enabled: hasId && !quiet && isLeader,
+      enabled: pollEnabled,
       staleTime: 0,
       refetchOnWindowFocus: true,
       refetchInterval: 2500,
@@ -1386,7 +1392,7 @@ function useGameSnapshot() {
     abi: GAME_ABI,
     functionName: "boostCooldownRemaining",
     query: {
-      enabled: hasId && !quiet && isLeader,
+      enabled: pollEnabled,
       staleTime: 0,
       refetchOnWindowFocus: true,
       refetchInterval: 2500,
@@ -1490,6 +1496,41 @@ function useGameSnapshot() {
 
   // -------- Cross-tab sync (BroadcastChannel) --------
   const bcRef = React.useRef<BroadcastChannel | null>(null);
+  // --- Authoritative commit latch (keeps UI in sync right after post/replace) ---
+  const armCommitLatch = React.useCallback(
+    (secs = 8) => {
+      commitLatchUntilRef.current =
+        Math.floor(Date.now() / 1000) + Math.max(1, secs);
+      // ensure timers / derived state tick immediately
+      setNowSec((prev) => Math.max(prev, computeChainNow()));
+    },
+    [computeChainNow],
+  );
+  const broadcastAnchor = React.useCallback((epoch: number) => {
+    try {
+      bcRef.current?.postMessage({ t: "anchor", epoch, at: Date.now() });
+    } catch {}
+  }, []);
+  const broadcastNudge = React.useCallback(() => {
+    try {
+      bcRef.current?.postMessage({ t: "nudge" });
+    } catch {}
+  }, []);
+  const broadcastBoostEnd = React.useCallback((end: number) => {
+    try {
+      bcRef.current?.postMessage({ t: "boostEnd", end, at: Date.now() });
+    } catch {}
+  }, []);
+  const broadcastCooldownEnd = React.useCallback((end: number) => {
+    try {
+      bcRef.current?.postMessage({ t: "cooldownEnd", end, at: Date.now() });
+    } catch {}
+  }, []);
+  const broadcastImmEnd = React.useCallback((end: number) => {
+    try {
+      bcRef.current?.postMessage({ t: "immEnd", end, at: Date.now() });
+    } catch {}
+  }, []);
   const WINDOW_COMMIT_KEY = "meowt:window:commit";
 
   type CommitSnapshot = {
@@ -1560,6 +1601,17 @@ function useGameSnapshot() {
         remProvided !== undefined ? Math.max(0, Math.floor(remProvided - ageSec)) : undefined;
       const startRaw = Number(s.start ?? 0);
       const startVal = Number.isFinite(startRaw) ? Math.max(0, Math.floor(startRaw)) : 0;
+      // treat as authoritative “new start” (replacement) for this id
+      if (startVal > 0) {
+        lastStartRef.current = startVal; // prevents stale replacement heuristics
+        gloryEntryLatchRef.current = false; // will re-arm naturally via exposure countdown
+      }
+      // keep the card visible while windows settle
+      showUntilRef.current = Math.max(
+        showUntilRef.current,
+        exposureEndRef.current,
+        gloryEndRef.current,
+      );
 
       const anchorEpoch =
         exposureEndVal > 0 && remNow !== undefined
@@ -1571,15 +1623,19 @@ function useGameSnapshot() {
       if (anchorEpoch > 0) {
         chainNowRef.current = { epoch: anchorEpoch, fetchedAt: nowMs };
         setNowSec((prev) => Math.max(prev, computeChainNow()));
+        // keep other tabs/devices in exact lockstep
+        broadcastAnchor(anchorEpoch);
       }
 
       if (snapId && snapId !== 0n) {
         writeWindowTimes(snapId, exposureEndRef.current, gloryEndRef.current, immEndRef.current);
       }
 
+      // For a few seconds, the author tab is authoritative
+      armCommitLatch(8);
       nudgeQueries(qc, [0, 200, 800]);
     },
-    [computeChainNow, idBig, qc]
+    [computeChainNow, idBig, qc, broadcastAnchor, armCommitLatch]
   );
 
   const broadcastCommit = React.useCallback(
@@ -1660,32 +1716,6 @@ function useGameSnapshot() {
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, [adoptCommit]);
-
-  function broadcastAnchor(epoch: number) {
-    try {
-      bcRef.current?.postMessage({ t: "anchor", epoch, at: Date.now() });
-    } catch {}
-  }
-  function broadcastNudge() {
-    try {
-      bcRef.current?.postMessage({ t: "nudge" });
-    } catch {}
-  }
-  function broadcastBoostEnd(end: number) {
-    try {
-      bcRef.current?.postMessage({ t: "boostEnd", end, at: Date.now() });
-    } catch {}
-  }
-  function broadcastCooldownEnd(end: number) {
-    try {
-      bcRef.current?.postMessage({ t: "cooldownEnd", end, at: Date.now() });
-    } catch {}
-  }
-  function broadcastImmEnd(end: number) {
-    try {
-      bcRef.current?.postMessage({ t: "immEnd", end, at: Date.now() });
-    } catch {}
-  }
 
   function boostKey(id: bigint | number | string) {
     return `meowt:boostEnd:${String(id)}`;
@@ -1830,7 +1860,7 @@ function useGameSnapshot() {
     })();
 
     return () => { cancelled = true; };
-  }, [hasId, idBig, publicClient, computeChainNow]);
+  }, [hasId, idBig, publicClient, computeChainNow, broadcastAnchor]);
 
   // Rehydrate persisted immunity end for this message id (instant UI on refresh)
   React.useEffect(() => {
@@ -1970,7 +2000,20 @@ function useGameSnapshot() {
     if (idBig && idBig !== 0n) {
       writeWindowTimes(idBig, exposureEndRef.current, gloryEndRef.current, immEndRef.current);
     }
-  }, [hasId, idBig, startTime, B0secs, winGlory, winPostImm, booting, OPTIMISTIC_SHOW_MS, ID_CHANGE_HOLD_MS, qc]);
+  }, [
+    hasId,
+    idBig,
+    startTime,
+    B0secs,
+    winGlory,
+    winPostImm,
+    booting,
+    OPTIMISTIC_SHOW_MS,
+    ID_CHANGE_HOLD_MS,
+    qc,
+    broadcastImmEnd,
+    broadcastNudge,
+  ]);
 
   const idChangeHold = Date.now() < idHoldUntilRef.current;
 
@@ -1996,7 +2039,7 @@ function useGameSnapshot() {
     chainNowRef.current = { epoch: anchorEpoch, fetchedAt: Date.now() };
     setNowSec((prev) => Math.max(prev, computeChainNow()));
     broadcastAnchor(anchorEpoch);
-  }, [remChainBN, endTsNum, startTime, B0secs, computeChainNow]);
+  }, [remChainBN, endTsNum, startTime, B0secs, computeChainNow, broadcastAnchor]);
 
   // NEW: anchor chain "now" during glory so all tabs/devices stay in lockstep
   React.useEffect(() => {
@@ -2016,7 +2059,7 @@ function useGameSnapshot() {
     chainNowRef.current = { epoch: anchorEpoch, fetchedAt: Date.now() };
     setNowSec((prev) => Math.max(prev, computeChainNow()));
     broadcastAnchor(anchorEpoch); // keep other tabs/devices synced
-  }, [gloryRemChainBN, startTime, B0secs, winGlory, computeChainNow]);
+  }, [gloryRemChainBN, startTime, B0secs, winGlory, computeChainNow, broadcastAnchor]);
 
   // Glory window
   React.useEffect(() => {
@@ -2053,7 +2096,7 @@ function useGameSnapshot() {
       broadcastBoostEnd(end);
       if (idBig && idBig !== 0n) writeBoostEndLS(idBig, end);
     }
-  }, [boostedRemLiveBN, computeChainNow, idBig]);
+  }, [boostedRemLiveBN, computeChainNow, idBig, broadcastBoostEnd]);
 
   // Live: anchor cooldown end from chain-anchored "now", then broadcast
   React.useEffect(() => {
@@ -2064,7 +2107,7 @@ function useGameSnapshot() {
       cooldownEndRef.current = end;
       broadcastCooldownEnd(end);
     }
-  }, [boostCooldownLiveBN, computeChainNow]);
+  }, [boostCooldownLiveBN, computeChainNow, broadcastCooldownEnd]);
 
   // Boost & cooldown latches
   React.useEffect(() => {
@@ -2108,7 +2151,7 @@ function useGameSnapshot() {
         }
       }
     }
-  }, [startTime, winPostImm, idBig, hasId]);
+  }, [startTime, winPostImm, idBig, hasId, broadcastImmEnd]);
 
   React.useEffect(() => {
     if (hasId && lastIdRef.current !== idBig) {
@@ -2478,6 +2521,8 @@ function useGameSnapshot() {
     B0secs,
     winGlory,
     winFreeze,
+    broadcastAnchor,
+    broadcastNudge,
   ]);
 
   // Final "show" decision
@@ -2495,7 +2540,7 @@ function useGameSnapshot() {
       liveProofNow ||
       gloryActiveHint // glory predicted/confirmed keeps the card visible
     );
-  const rawReadyEnough = Boolean(raw) || liveProofNow;
+  const rawReadyEnough = Boolean(raw) || liveProofNow || commitLatchActive();
   const effectiveShow =
     baseShow &&
     !definitelyOver &&
@@ -2542,7 +2587,12 @@ function useGameSnapshot() {
   const loadingState = (!idKnown || refreshGate)
     ? true
     : (hasId
-        ? Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive || !rehydrationComplete)
+        ? Boolean(
+            bootHold ||
+            idChangeHold ||
+            waitingForId ||
+            (!commitLatchActive() && (stillFetchingActive || !rehydrationComplete))
+          )
         : false);
 
   return {
