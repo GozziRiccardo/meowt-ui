@@ -1531,6 +1531,128 @@ function useGameSnapshot() {
       bcRef.current?.postMessage({ t: "immEnd", end, at: Date.now() });
     } catch {}
   }, []);
+
+  // Re-anchor all local clocks/ends once, then nudge queries + broadcast
+  const forceReanchor = React.useCallback(async () => {
+    try {
+      setNowSec((prev) => Math.max(prev, computeChainNow()));
+      if (hasId && publicClient) {
+        const [remRaw, gloryRemRaw, boostedRemRaw, cooldownRemRaw] = await Promise.all([
+          publicClient
+            .readContract({
+              address: GAME as `0x${string}`,
+              abi: GAME_ABI,
+              functionName: "remainingSeconds",
+              args: [idBig],
+            })
+            .catch(() => 0n),
+          publicClient
+            .readContract({
+              address: GAME as `0x${string}`,
+              abi: GAME_ABI,
+              functionName: "gloryRemaining",
+            })
+            .catch(() => 0n),
+          publicClient
+            .readContract({
+              address: GAME as `0x${string}`,
+              abi: GAME_ABI,
+              functionName: "boostedRemaining",
+            })
+            .catch(() => 0n),
+          publicClient
+            .readContract({
+              address: GAME as `0x${string}`,
+              abi: GAME_ABI,
+              functionName: "boostCooldownRemaining",
+            })
+            .catch(() => 0n),
+        ]);
+
+        const rem = Number(remRaw ?? 0n);
+        const gRem = Number(gloryRemRaw ?? 0n);
+        const boostedRem = Number(boostedRemRaw ?? 0n);
+        const cooldownRem = Number(cooldownRemRaw ?? 0n);
+
+        const fallbackEnd =
+          exposureEndRef.current > 0
+            ? exposureEndRef.current
+            : startTime && B0secs
+            ? startTime + B0secs
+            : 0;
+
+        const gloryEndPred = startTime && B0secs && winGlory ? startTime + B0secs + winGlory : 0;
+
+        const candidates: number[] = [];
+        if (fallbackEnd > 0 && Number.isFinite(rem) && rem >= 0) candidates.push(fallbackEnd - rem);
+        if (gloryEndPred > 0 && Number.isFinite(gRem) && gRem > 0 && !suppressGloryAnchorNow()) {
+          candidates.push(gloryEndPred - gRem);
+        }
+
+        const bestEpoch = candidates.length ? Math.max(...candidates) : 0;
+        if (bestEpoch > 0) {
+          chainNowRef.current = { epoch: bestEpoch, fetchedAt: Date.now() };
+          setNowSec((prev) => Math.max(prev, computeChainNow()));
+          broadcastAnchor(bestEpoch);
+        }
+
+        if (gRem > 0) {
+          const predictedMaskEnd =
+            (gloryEndPred > 0 ? gloryEndPred : Math.floor(Date.now() / 1000) + gRem) +
+            Math.max(0, winFreeze || 0);
+          try {
+            writeMaskUntil(GLORY_MASK_KEY, predictedMaskEnd, { messageId: idBig });
+          } catch {}
+        }
+
+        const nowEpoch = Math.floor(Date.now() / 1000);
+        if (gRem > 0) {
+          const predictedGloryEnd = gloryEndPred > 0 ? gloryEndPred : nowEpoch + gRem;
+          gloryEndRef.current = Math.max(gloryEndRef.current, predictedGloryEnd);
+          showUntilRef.current = Math.max(showUntilRef.current, predictedGloryEnd);
+        }
+        if (boostedRem > 0) {
+          const end = nowEpoch + boostedRem;
+          if (end > boostEndRef.current) {
+            boostEndRef.current = end;
+            if (idBig && idBig !== 0n) writeBoostEndLS(idBig, end);
+          }
+        }
+        if (cooldownRem > 0) {
+          cooldownEndRef.current = Math.max(cooldownEndRef.current, nowEpoch + cooldownRem);
+        }
+
+        // Rehydrate immunity quickly
+        const persisted = readMaskState(IMMUNITY_KEY);
+        const pid = parseMaskMessageId(persisted?.messageId);
+        const nowS = Math.floor(Date.now() / 1000);
+        if (pid === idBig && Number.isFinite(persisted?.until) && persisted!.until > nowS) {
+          immEndRef.current = Math.max(immEndRef.current, persisted!.until);
+        }
+      }
+    } finally {
+      nudgeQueries(qc, [0, 120, 600, 1400]);
+      broadcastNudge();
+    }
+  }, [
+    qc,
+    publicClient,
+    hasId,
+    idBig,
+    computeChainNow,
+    startTime,
+    B0secs,
+    winGlory,
+    broadcastAnchor,
+    broadcastNudge,
+    winFreeze,
+  ]);
+
+  function broadcastForceReanchor() {
+    try {
+      bcRef.current?.postMessage({ t: "forceReanchor", at: Date.now() });
+    } catch {}
+  }
   const WINDOW_COMMIT_KEY = "meowt:window:commit";
 
   type CommitSnapshot = {
@@ -1675,6 +1797,8 @@ function useGameSnapshot() {
         }
       } else if (data.t === "nudge") {
         nudgeQueries(qc, [0, 500]);
+      } else if (data.t === "forceReanchor") {
+        forceReanchor();
       } else if (data.t === "boostEnd" && Number.isFinite(data.end)) {
         const end = Number(data.end);
         if (end > boostEndRef.current) {
@@ -1699,7 +1823,7 @@ function useGameSnapshot() {
       bcRef.current?.close();
       bcRef.current = null;
     };
-  }, [adoptCommit, computeChainNow, qc, idBig]);
+  }, [adoptCommit, computeChainNow, qc, idBig, forceReanchor]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2380,150 +2504,20 @@ function useGameSnapshot() {
   React.useEffect(() => {
     // Re-anchor clocks when the tab becomes active again (focus/pageshow/visibility)
     if (typeof window === "undefined" || typeof document === "undefined") return;
-    let cancelled = false;
-    const reanchor = async () => {
-      if (cancelled) return;
-      try {
-        setNowSec((prev) => Math.max(prev, computeChainNow()));
-        if (hasId && publicClient) {
-          // Read both windows so we can anchor correctly during glory, too.
-          const [remRaw, gloryRemRaw, boostedRemRaw, cooldownRemRaw] = await Promise.all([
-            publicClient
-              .readContract({
-                address: GAME as `0x${string}`,
-                abi: GAME_ABI,
-                functionName: "remainingSeconds",
-                // keep args in sync with useReadContract above
-                args: [idBig],
-              })
-              .catch(() => 0n),
-            publicClient
-              .readContract({
-                address: GAME as `0x${string}`,
-                abi: GAME_ABI,
-                functionName: "gloryRemaining",
-              })
-              .catch(() => 0n),
-            publicClient
-              .readContract({
-                address: GAME as `0x${string}`,
-                abi: GAME_ABI,
-                functionName: "boostedRemaining",
-              })
-              .catch(() => 0n),
-            publicClient
-              .readContract({
-                address: GAME as `0x${string}`,
-                abi: GAME_ABI,
-                functionName: "boostCooldownRemaining",
-              })
-              .catch(() => 0n),
-          ]);
-
-          const rem = Number(remRaw ?? 0n);
-          const gRem = Number(gloryRemRaw ?? 0n);
-          const boostedRem = Number(boostedRemRaw ?? 0n);
-          const cooldownRem = Number(cooldownRemRaw ?? 0n);
-          if (cancelled) return;
-
-          const fallbackEnd =
-            exposureEndRef.current > 0
-              ? exposureEndRef.current
-              : startTime && B0secs
-              ? startTime + B0secs
-              : 0;
-          const gloryEndPred =
-            startTime && B0secs && winGlory ? startTime + B0secs + winGlory : 0;
-
-          const candidates: number[] = [];
-          if (fallbackEnd > 0 && Number.isFinite(rem) && rem >= 0) {
-            candidates.push(fallbackEnd - rem);
-          }
-          if (
-            gloryEndPred > 0 &&
-            Number.isFinite(gRem) &&
-            gRem > 0 &&
-            !suppressGloryAnchorNow()
-          ) {
-            candidates.push(gloryEndPred - gRem);
-          }
-
-          const bestEpoch = candidates.length ? Math.max(...candidates) : 0;
-          if (bestEpoch > 0 && Number.isFinite(bestEpoch)) {
-            chainNowRef.current = { epoch: bestEpoch, fetchedAt: Date.now() };
-            setNowSec((prev) => Math.max(prev, computeChainNow()));
-            broadcastAnchor(bestEpoch);
-          }
-
-          // If we're in glory on resume, persist a fresh mask end so other tabs rehydrate.
-          if (gRem > 0) {
-            // Absolute end = predicted glory end; mask extends by winFreeze seconds.
-            const predictedMaskEnd =
-              (gloryEndPred > 0 ? gloryEndPred : Math.floor(Date.now() / 1000) + gRem) +
-              Math.max(0, winFreeze || 0);
-            try {
-              writeMaskUntil(GLORY_MASK_KEY, predictedMaskEnd, { messageId: idBig });
-            } catch {}
-          }
-          // ---- FAST-PATH: snap boost/glory/cooldown right away on focus ----
-          // This updates the end refs immediately so the UI feels instant,
-          // without waiting for TanStack refetch to complete.
-          const nowEpoch = Math.floor(Date.now() / 1000);
-          if (gRem > 0) {
-            const predictedGloryEnd =
-              startTime && B0secs && winGlory ? startTime + B0secs + winGlory : nowEpoch + gRem;
-            gloryEndRef.current = Math.max(gloryEndRef.current, predictedGloryEnd);
-            showUntilRef.current = Math.max(showUntilRef.current, predictedGloryEnd);
-          }
-          if (boostedRem > 0) {
-            const end = nowEpoch + boostedRem;
-            if (end > boostEndRef.current) {
-              boostEndRef.current = end;
-              if (idBig && idBig !== 0n) writeBoostEndLS(idBig, end);
-            }
-          }
-          if (cooldownRem > 0) {
-            cooldownEndRef.current = Math.max(cooldownEndRef.current, nowEpoch + cooldownRem);
-          }
-        }
-      } catch {
-        /* ignore network hiccups; we'll still nudge queries below */
-      }
-      try {
-        const persisted = readMaskState(IMMUNITY_KEY);
-        const pid = parseMaskMessageId(persisted?.messageId);
-        const nowS = Math.floor(Date.now() / 1000);
-        if (pid === idBig && Number.isFinite(persisted?.until) && persisted!.until > nowS) {
-          immEndRef.current = Math.max(immEndRef.current, persisted!.until);
-        }
-      } catch {}
-      nudgeQueries(qc, [0, 120, 600, 1400]);
-      broadcastNudge();
+    const reanchor = () => {
+      forceReanchor();
     };
-    const onVis = () => document.visibilityState === "visible" && reanchor();
+    const onVis = () => document.visibilityState === "visible" && forceReanchor();
     window.addEventListener("focus", reanchor, true);
     window.addEventListener("pageshow", reanchor);
     document.addEventListener("visibilitychange", onVis);
     return () => {
-      cancelled = true;
       window.removeEventListener("focus", reanchor, true);
       window.removeEventListener("pageshow", reanchor);
       document.removeEventListener("visibilitychange", onVis);
     };
     // include timing parameters to avoid stale predicted ends
-  }, [
-    qc,
-    publicClient,
-    hasId,
-    idBig,
-    computeChainNow,
-    startTime,
-    B0secs,
-    winGlory,
-    winFreeze,
-    broadcastAnchor,
-    broadcastNudge,
-  ]);
+  }, [forceReanchor]);
 
   // Final "show" decision
   const untilShow = Math.max(
@@ -2620,6 +2614,8 @@ function useGameSnapshot() {
     adoptCommit,
     broadcastCommit,
     persistCommitForFallback,
+    forceReanchor,
+    broadcastForceReanchor,
   } as const;
 }
 const GameSnapshotContext = React.createContext<ReturnType<typeof useGameSnapshot> | null>(null);
@@ -2855,6 +2851,9 @@ function PostBoxInner() {
               try { snap.adoptCommit(commit); } catch {}
               snap.broadcastCommit(commit);
               snap.persistCommitForFallback(commit);
+              await snap.forceReanchor();
+              snap.broadcastForceReanchor();
+              setTimeout(() => snap.broadcastForceReanchor(), 250);
             }
           }
         } catch {}
@@ -3118,6 +3117,9 @@ function ReplaceBoxInner() {
             try { snap.adoptCommit(commit); } catch {}
             snap.broadcastCommit(commit);
             snap.persistCommitForFallback(commit);
+            await snap.forceReanchor();
+            snap.broadcastForceReanchor();
+            setTimeout(() => snap.broadcastForceReanchor(), 250);
           }
         } catch { /* best effort */ }
 
