@@ -2602,7 +2602,7 @@ function PostBoxInner() {
         if (activeId && activeId !== 0n) {
           writeModDisarmLS(
             activeId,
-            Math.floor(Date.now() / 1000) + 28
+            Math.floor(Date.now() / 1000) + POST_HANDOFF_DISARM_SECS
           );
         }
         try {
@@ -2844,7 +2844,7 @@ function ReplaceBoxInner() {
         if (activeId && activeId !== 0n) {
           writeModDisarmLS(
             activeId,
-            Math.floor(Date.now() / 1000) + 28
+            Math.floor(Date.now() / 1000) + POST_HANDOFF_DISARM_SECS
           );
         }
         try {
@@ -3027,6 +3027,7 @@ const GLORY_MASK_KEY = "meowt:mask:glory";
 const NUKE_MASK_KEY = "meowt:mask:nuke";
 const MOD_MASK_KEY = "meowt:mask:mod";
 const MOD_DISARM_LS_KEY = "meowt:mod:disarm";
+const POST_HANDOFF_DISARM_SECS = 120;
 // seconds before glory ends to begin masking (hard guard against early flashes)
 const GLORY_MASK_LATCH_PAD = 3;
 
@@ -4127,7 +4128,8 @@ function ActiveCard() {
   if (modMaskActive) {
     const stillActive = modMaskUntilRef.current > 0 && now < modMaskUntilRef.current;
     const wantStart = !modAlreadySeen || modIdChangedWhileShowing;
-    if ((showingModRef.current && stillActive) || wantStart || persistedModActive) {
+    const persistAllowed = persistedModActive && !modAlreadySeen;
+    if ((showingModRef.current && stillActive) || wantStart || persistAllowed) {
       showModMask = true;
     }
   } else {
