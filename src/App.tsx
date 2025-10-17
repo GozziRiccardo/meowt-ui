@@ -593,27 +593,27 @@ function writeWindowTimes(
 
 // --- Handoff overlay (pure UI) ---
 const HANDOFF_LS_KEY = "meowt:handoff:v1";
-const HANDOFF_TTL_MS = 15000;
 const HANDOFF_MIN_HOLD_MS = 900;
-type HandoffReason = "post" | "replace" | "detected";
 
-function emitLocalHandoff(reason: HandoffReason, ttl = HANDOFF_TTL_MS) {
+// Force-loading handoff gate (reuses existing Loading… UI)
+const HANDOFF_FORCE_KEY = "meowt:handoff:forceUntil"; // epoch ms
+const HANDOFF_TOKEN_PREFIX = "meowt:handoff:seen"; // session token per id@start
+
+function armForceLoading(ms = 2500) {
   try {
-    const payload = { reason, until: Date.now() + ttl };
-    window.dispatchEvent(new CustomEvent("meowt:handoff", { detail: payload }));
+    sessionStorage.setItem(HANDOFF_FORCE_KEY, String(Date.now() + ms));
   } catch {}
 }
-
-function broadcastHandoff(reason: HandoffReason, ttl = HANDOFF_TTL_MS) {
-  const payload = { t: "handoff", reason, until: Date.now() + ttl, at: Date.now() };
+function forceLoadingActive(): boolean {
   try {
-    const bc = new BroadcastChannel("meowt-sync-v1");
-    bc.postMessage(payload);
-    bc.close();
-  } catch {}
-  try {
-    localStorage.setItem(HANDOFF_LS_KEY, JSON.stringify(payload));
-  } catch {}
+    const until = Number(sessionStorage.getItem(HANDOFF_FORCE_KEY) || 0);
+    return Number.isFinite(until) && Date.now() < until;
+  } catch {
+    return false;
+  }
+}
+function handoffSeenToken(id: bigint, start: number | string) {
+  return `${HANDOFF_TOKEN_PREFIX}:${String(id)}@${String(start)}`;
 }
 
 const MASK_EVENT = "meowt:mask:update";
@@ -655,8 +655,13 @@ function hardReloadAfterCommitIfNeeded(params: {
     if (Number.isFinite(immUntil) && (immUntil || 0) > 0) {
       writeMaskUntil(IMMUNITY_KEY, immUntil!, { messageId: id });
     }
-    // Make sibling tabs on the same device show the overlay & reload too
-    broadcastHandoff(reason);
+    // Arm local tab’s Loading… UI and tell sibling tabs before we reload
+    armForceLoading(2600);
+    try {
+      const bc = new BroadcastChannel("meowt-sync-v1");
+      bc.postMessage({ t: "handoff", reason, until: Date.now() + 2600, at: Date.now() });
+      bc.close();
+    } catch {}
   } catch {}
   // Small delay to allow BC/storage events to flush, then reload.
   scheduleHardReload(reason, 120);
@@ -1663,6 +1668,13 @@ function useGameSnapshot() {
     const onMsg = (evt: MessageEvent) => {
       const data: any = evt?.data;
       if (!data || typeof data !== "object") return;
+      if (data.t === "handoff" && Number.isFinite(data.until)) {
+        try { sessionStorage.setItem(HANDOFF_FORCE_KEY, String(data.until)); } catch {}
+        if (!(window as any).__meowtReloadScheduled) {
+          scheduleHardReload("post", 120);
+        }
+        return;
+      }
       if (data.t === "anchor" && Number.isFinite(data.epoch) && Number.isFinite(data.at)) {
         const at = Number(data.at);
         if (at > lastAnchorFromPeer.current) {
@@ -1904,12 +1916,6 @@ function useGameSnapshot() {
       }
 
       idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS; // (hold stays in ms)
-      // New active id — show overlay & take the same path on non-author tabs/devices
-      emitLocalHandoff("detected");
-      if (!(window as any).__meowtReloadScheduled) {
-        scheduleHardReload("post", 120);
-      }
-
       // Hydrate boost end from LS to avoid "reset to max duration" after refresh.
       const persisted = readBoostEndLS(idBig);
       const nowS = computeChainNow();
@@ -1963,7 +1969,18 @@ function useGameSnapshot() {
     if (!seenBefore) return; // first hydrate, not a replacement transition
 
     // --- Replacement detected (same id, new start) ---
-    emitLocalHandoff("detected");
+    // Smooth handoff for non-author tabs/devices (one-shot per id@start)
+    try {
+      const token = handoffSeenToken(idBig, startTime);
+      const seen = sessionStorage.getItem(token) === "1";
+      if (!seen) {
+        sessionStorage.setItem(token, "1");
+        armForceLoading(2600);
+        if (!(window as any).__meowtReloadScheduled) {
+          scheduleHardReload("replace", 120);
+        }
+      }
+    } catch {}
     const nowEpoch = Math.floor(Date.now() / 1000);
     const predictedExposureEnd = startTime && B0secs ? startTime + B0secs : 0;
     const predictedGloryEnd = predictedExposureEnd > 0 && winGlory
@@ -2598,8 +2615,15 @@ function useGameSnapshot() {
   const loadingState = (!idKnown || refreshGate)
     ? true
     : (hasId
-        ? Boolean(bootHold || idChangeHold || waitingForId || stillFetchingActive || !rehydrationComplete)
-        : false);
+        ? Boolean(
+            bootHold ||
+            idChangeHold ||
+            waitingForId ||
+            stillFetchingActive ||
+            !rehydrationComplete ||
+            forceLoadingActive()
+          )
+        : Boolean(forceLoadingActive()));
 
   return {
     id: idBig,
@@ -2773,8 +2797,6 @@ function PostBoxInner() {
           args: [uriUsed, hash, stakeWei, 0n, 0n, "0x"],
           chainId: TARGET_CHAIN.id,
         });
-        // Show overlay right away on this tab
-        emitLocalHandoff("post");
 
         await confirmThenRefresh(txHash);
 
@@ -3020,8 +3042,6 @@ function ReplaceBoxInner() {
           args: [uriUsed, hash, stakeWei, 0n, 0n, "0x"],
           chainId: TARGET_CHAIN.id,
         });
-        // Show overlay right away on this tab
-        emitLocalHandoff("replace");
 
         await confirmThenRefresh(h);
 
