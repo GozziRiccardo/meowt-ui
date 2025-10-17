@@ -3350,15 +3350,37 @@ function ActiveCard() {
       return now >= maskEnd ? false : prev;
     });
   }, [gloryMaskEligible, maskEnd, now]);
+  const showingGloryRef = React.useRef(false);
+  const showingModRef = React.useRef(false);
+  const showingNukeRef = React.useRef(false);
+
   const glorySeenId =
     gloryMaskMessageIdRef.current && gloryMaskMessageIdRef.current !== 0n
       ? gloryMaskMessageIdRef.current
       : msgId;
+  const gloryAlreadySeen = glorySeenId ? hasMaskSeen("glory", glorySeenId) : false;
+  const persistedGloryActive =
+    maskEnd > 0 &&
+    now < maskEnd &&
+    gloryMaskMessageIdRef.current &&
+    msgId &&
+    msgId !== 0n &&
+    gloryMaskMessageIdRef.current === msgId;
+  const gloryWindowActive =
+    gloryMaskLatched || gloryMaskEligible || persistedGloryActive;
   const showGloryMask =
-    gloryMaskLatched && !(glorySeenId && hasMaskSeen("glory", glorySeenId));
+    gloryWindowActive &&
+    (!gloryAlreadySeen || showingGloryRef.current || persistedGloryActive);
   React.useEffect(() => {
-    if (showGloryMask && glorySeenId && glorySeenId !== 0n) {
-      markMaskSeenOnce("glory", glorySeenId);
+    if (showGloryMask) {
+      if (!showingGloryRef.current) {
+        showingGloryRef.current = true;
+        if (glorySeenId && glorySeenId !== 0n) {
+          markMaskSeenOnce("glory", glorySeenId);
+        }
+      }
+    } else {
+      showingGloryRef.current = false;
     }
   }, [showGloryMask, glorySeenId]);
   const gloryMaskLeft = showGloryMask
@@ -3903,26 +3925,51 @@ function ActiveCard() {
     modMaskMessageIdRef.current && modMaskMessageIdRef.current !== 0n
       ? modMaskMessageIdRef.current
       : msgId;
+  const modAlreadySeen = modSeenId ? hasMaskSeen("mod", modSeenId) : false;
+  const persistedModActive =
+    modMaskActive &&
+    Boolean(modMaskMessageIdRef.current && modMaskMessageIdRef.current !== 0n) &&
+    (!modSeenId || modMaskMessageIdRef.current === modSeenId);
   const showModMask =
-    modMaskActive && !(modSeenId && hasMaskSeen("mod", modSeenId));
+    modMaskActive &&
+    (!modAlreadySeen || showingModRef.current || persistedModActive);
   React.useEffect(() => {
-    if (showModMask && modSeenId && modSeenId !== 0n) {
-      markMaskSeenOnce("mod", modSeenId);
+    if (showModMask) {
+      if (!showingModRef.current) {
+        showingModRef.current = true;
+        if (modSeenId && modSeenId !== 0n) {
+          markMaskSeenOnce("mod", modSeenId);
+        }
+      }
+    } else {
+      showingModRef.current = false;
     }
   }, [showModMask, modSeenId]);
-  const showNukeMaskBase =
-    !modMaskActive &&
-    now < nukeMaskUntilRef.current &&
-    !masksSuppressed(NUKE_MASK_KEY);
+  const nukeMaskActive =
+    now < nukeMaskUntilRef.current && !masksSuppressed(NUKE_MASK_KEY);
+  const showNukeMaskBase = !showModMask && nukeMaskActive;
   const nukeSeenId =
     nukeMaskMessageIdRef.current && nukeMaskMessageIdRef.current !== 0n
       ? nukeMaskMessageIdRef.current
       : msgId;
+  const nukeAlreadySeen = nukeSeenId ? hasMaskSeen("nuke", nukeSeenId) : false;
+  const persistedNukeActive =
+    nukeMaskActive &&
+    Boolean(nukeMaskMessageIdRef.current && nukeMaskMessageIdRef.current !== 0n) &&
+    (!nukeSeenId || nukeMaskMessageIdRef.current === nukeSeenId);
   const showNukeMask =
-    showNukeMaskBase && !(nukeSeenId && hasMaskSeen("nuke", nukeSeenId));
+    showNukeMaskBase &&
+    (!nukeAlreadySeen || showingNukeRef.current || persistedNukeActive);
   React.useEffect(() => {
-    if (showNukeMask && nukeSeenId && nukeSeenId !== 0n) {
-      markMaskSeenOnce("nuke", nukeSeenId);
+    if (showNukeMask) {
+      if (!showingNukeRef.current) {
+        showingNukeRef.current = true;
+        if (nukeSeenId && nukeSeenId !== 0n) {
+          markMaskSeenOnce("nuke", nukeSeenId);
+        }
+      }
+    } else {
+      showingNukeRef.current = false;
     }
   }, [showNukeMask, nukeSeenId]);
   const modMaskLeft = showModMask
