@@ -2329,7 +2329,9 @@ function useGameSnapshot() {
           }
 
           // If we're in glory on resume, persist a fresh mask end so other tabs rehydrate.
-          if (gRem > 0) {
+          // ⚠️ Only persist while we're inside the latch window (~last 3s of glory).
+          // Keep the bound in sync with GLORY_MASK_LATCH_PAD.
+          if (gRem > 0 && gRem <= GLORY_MASK_LATCH_PAD) {
             // Absolute end = predicted glory end; mask extends by winFreeze seconds.
             const predictedMaskEnd =
               (gloryEndPred > 0 ? gloryEndPred : Math.floor(Date.now() / 1000) + gRem) +
@@ -3462,7 +3464,7 @@ function ActiveCard() {
     msgId !== 0n &&
     gloryMaskMessageIdRef.current === msgId;
   const gloryWindowActive =
-    gloryMaskLatched || gloryMaskEligible || persistedGloryActive;
+    gloryMaskLatched || gloryMaskEligible || (persistedGloryActive && now >= latchPadStart);
   // Only consider ID changes while the overlay is currently showing
   const gloryIdChangedWhileShowing =
     gloryId !== 0n && showingGloryRef.current && showingGloryIdRef.current !== gloryId;
@@ -3479,7 +3481,7 @@ function ActiveCard() {
     if (
       (showingGloryRef.current && stillActive) ||
       wantStart ||
-      persistedGloryActive
+      (persistedGloryActive && now >= latchPadStart)
     ) {
       showGloryMask = true;
     }
