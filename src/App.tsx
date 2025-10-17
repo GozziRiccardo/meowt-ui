@@ -592,6 +592,9 @@ function writeWindowTimes(
 }
 
 const MASK_EVENT = "meowt:mask:update";
+const HARD_RELOAD_SIGNAL_KEY = "meowt:hardReloadSignal";
+const HARD_RELOAD_EVENT = "meowt:hardReload";
+const HARD_RELOAD_TTL_MS = 15_000;
 type MaskEventDetail = { key: string; until: number; messageId?: string | null };
 
 // ---- Hard reload helpers (last-resort to kill the “wrong layout” on poster tab) ----
@@ -629,6 +632,29 @@ function hardReloadAfterCommitIfNeeded(params: {
     }
     if (Number.isFinite(immUntil) && (immUntil || 0) > 0) {
       writeMaskUntil(IMMUNITY_KEY, immUntil!, { messageId: id });
+    }
+    const payload = {
+      ts: Date.now(),
+      reason,
+      id: id.toString(),
+      exposureEnd: Number.isFinite(exposureEnd) ? Math.max(0, exposureEnd || 0) : 0,
+      gloryEnd: Number.isFinite(gloryEnd) ? Math.max(0, gloryEnd || 0) : 0,
+      immUntil: Number.isFinite(immUntil) ? Math.max(0, immUntil || 0) : 0,
+    };
+    try {
+      localStorage.setItem(HARD_RELOAD_SIGNAL_KEY, JSON.stringify(payload));
+    } catch {}
+    try {
+      sessionStorage.setItem(HARD_RELOAD_SIGNAL_KEY, JSON.stringify(payload));
+    } catch {}
+    try {
+      window.dispatchEvent(
+        new CustomEvent(HARD_RELOAD_EVENT, { detail: payload })
+      );
+    } catch {
+      try {
+        window.dispatchEvent(new Event(HARD_RELOAD_EVENT));
+      } catch {}
     }
   } catch {}
   // Small delay to allow BC/storage events to flush, then reload.
@@ -1306,11 +1332,74 @@ function useGameSnapshot() {
     } catch { return false; }
   });
   React.useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const markPending = (payload: any, triggerReload: boolean) => {
+      if (!payload || typeof payload !== "object") return;
+      const ts = Number(payload.ts);
+      if (!Number.isFinite(ts)) return;
+      if (Date.now() - ts > HARD_RELOAD_TTL_MS) {
+        try { sessionStorage.removeItem(HARD_RELOAD_SIGNAL_KEY); } catch {}
+        return;
+      }
+
+      setRefreshGate(true);
+      const enriched = {
+        ...payload,
+        ts,
+      };
+      try {
+        sessionStorage.setItem(HARD_RELOAD_SIGNAL_KEY, JSON.stringify(enriched));
+      } catch {}
+
+      if (triggerReload) {
+        const reason = payload.reason === "replace" ? "replace-peer" : "post-peer";
+        scheduleHardReload(reason, 120);
+      }
+    };
+
+    const onHardReload = (evt: any) => {
+      const detail = evt?.detail;
+      if (!detail || typeof detail !== "object") return;
+      markPending(detail, false);
+    };
+
+    const onStorage = (evt: StorageEvent) => {
+      if (evt.key !== HARD_RELOAD_SIGNAL_KEY || !evt.newValue) return;
+      try {
+        const parsed = JSON.parse(evt.newValue);
+        markPending(parsed, true);
+      } catch {}
+    };
+
+    window.addEventListener(HARD_RELOAD_EVENT, onHardReload as any);
+    window.addEventListener("storage", onStorage);
+
+    try {
+      const raw = sessionStorage.getItem(HARD_RELOAD_SIGNAL_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        markPending(parsed, false);
+      }
+    } catch {}
+
+    return () => {
+      window.removeEventListener(HARD_RELOAD_EVENT, onHardReload as any);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+  React.useEffect(() => {
     if (!idKnown && (typeof id === "bigint" || !!idError)) {
       setIdKnown(true);
       setRefreshGate(false);
     }
   }, [id, idError, idKnown]);
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!refreshGate) {
+      try { sessionStorage.removeItem(HARD_RELOAD_SIGNAL_KEY); } catch {}
+    }
+  }, [refreshGate]);
 
   // Reset zero-id grace when we get a non-zero ID
   React.useEffect(() => {
