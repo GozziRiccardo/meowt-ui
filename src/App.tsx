@@ -2424,6 +2424,13 @@ function useGameSnapshot() {
       gloryActiveHint // glory predicted/confirmed keeps the card visible
     );
   const rawReadyEnough = Boolean(raw) || liveProofNow;
+  let handoffHold = false;
+  try {
+    const until = Number(sessionStorage.getItem("meowt:handoff:holdUntil") || 0);
+    if (Number.isFinite(until) && Math.floor(Date.now() / 1000) < until) {
+      handoffHold = true;
+    }
+  } catch {}
   const effectiveShow =
     baseShow &&
     !definitelyOver &&
@@ -2432,7 +2439,8 @@ function useGameSnapshot() {
     !idChangeHold &&
     !waitingForId &&
     rawReadyEnough &&
-    readyToShowLocks;
+    readyToShowLocks &&
+    !handoffHold;
 
   // Clear optimistic show once resolved
   React.useEffect(() => {
@@ -2597,6 +2605,12 @@ function PostBoxInner() {
             Math.floor(Date.now() / 1000) + 28
           );
         }
+        try {
+          sessionStorage.setItem(
+            "meowt:handoff:holdUntil",
+            String(Math.floor(Date.now() / 1000) + 2)
+          );
+        } catch {}
       } catch {}
       // Preflight network switch
       await ensureOnTargetChain().catch((e: any) => {
@@ -2833,6 +2847,12 @@ function ReplaceBoxInner() {
             Math.floor(Date.now() / 1000) + 28
           );
         }
+        try {
+          sessionStorage.setItem(
+            "meowt:handoff:holdUntil",
+            String(Math.floor(Date.now() / 1000) + 2)
+          );
+        } catch {}
       } catch {}
       // Preflight network switch
       await ensureOnTargetChain().catch((e: any) => {
@@ -3834,12 +3854,10 @@ function ActiveCard() {
   const hadActiveRef = React.useRef<boolean>(false);
   const lastDisarmTrackedIdRef = React.useRef<bigint>(0n);
 
+  // Keep MOD disarm in LS; it self-expires. This prevents a brief old-post
+  // resurgence during post/replace from re-triggering the MOD mask.
   React.useEffect(() => {
     if (!msgId || msgId === 0n) return;
-    const previous = lastDisarmTrackedIdRef.current;
-    if (previous !== 0n && previous !== msgId) {
-      clearModDisarmLS();
-    }
     lastDisarmTrackedIdRef.current = msgId;
   }, [msgId]);
 
