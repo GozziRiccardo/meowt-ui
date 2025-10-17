@@ -3937,6 +3937,17 @@ function ActiveCard() {
   async function probeResolution(idToCheck: bigint) {
     if (masksSuppressed()) return;
     try {
+      // Skip retro probe if a new active id is already live (replacement handoff).
+      try {
+        const chainActive = (await publicClient!.readContract({
+          address: GAME as `0x${string}`,
+          abi: GAME_ABI,
+          functionName: "activeMessageId",
+          blockTag: "latest",
+        })) as bigint;
+        if (chainActive && chainActive !== 0n && chainActive !== idToCheck) return;
+      } catch {}
+
       let flagged = false;
       try {
         flagged = (await withRetry(
@@ -4053,7 +4064,6 @@ function ActiveCard() {
       writeMaskUntil(MOD_MASK_KEY, 0);
       setModFrozenMessage(null);
       clearGloryMaskState();
-      clearModDisarmLS();
     }
   }, [
     hasActive,
@@ -4075,7 +4085,26 @@ function ActiveCard() {
         return;
       }
       const idToCheck = lastShownIdRef.current || msgId;
-      if (idToCheck && idToCheck !== 0n) probeResolution(idToCheck);
+      if (!idToCheck || idToCheck === 0n) {
+        hadActiveRef.current = hasActive;
+        return;
+      }
+      // If a new active id is already live on chain, this was a replacement handoff:
+      // do NOT retrofire MOD/NUKE for the previous id.
+      (async () => {
+        try {
+          const chainActive = (await publicClient?.readContract({
+            address: GAME as `0x${string}`,
+            abi: GAME_ABI,
+            functionName: "activeMessageId",
+            blockTag: "latest",
+          })) as bigint;
+          if (chainActive && chainActive !== 0n && chainActive !== idToCheck) {
+            return;
+          }
+        } catch {}
+        await probeResolution(idToCheck);
+      })();
     }
     hadActiveRef.current = hasActive;
   }, [msgId, hasActive, publicClient, NUKE_MASK_SECS]);
