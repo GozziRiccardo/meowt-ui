@@ -591,6 +591,31 @@ function writeWindowTimes(
   } catch {}
 }
 
+// --- Handoff overlay (pure UI) ---
+const HANDOFF_LS_KEY = "meowt:handoff:v1";
+const HANDOFF_TTL_MS = 15000;
+const HANDOFF_MIN_HOLD_MS = 900;
+type HandoffReason = "post" | "replace" | "detected";
+
+function emitLocalHandoff(reason: HandoffReason, ttl = HANDOFF_TTL_MS) {
+  try {
+    const payload = { reason, until: Date.now() + ttl };
+    window.dispatchEvent(new CustomEvent("meowt:handoff", { detail: payload }));
+  } catch {}
+}
+
+function broadcastHandoff(reason: HandoffReason, ttl = HANDOFF_TTL_MS) {
+  const payload = { t: "handoff", reason, until: Date.now() + ttl, at: Date.now() };
+  try {
+    const bc = new BroadcastChannel("meowt-sync-v1");
+    bc.postMessage(payload);
+    bc.close();
+  } catch {}
+  try {
+    localStorage.setItem(HANDOFF_LS_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
 const MASK_EVENT = "meowt:mask:update";
 type MaskEventDetail = { key: string; until: number; messageId?: string | null };
 
@@ -630,9 +655,94 @@ function hardReloadAfterCommitIfNeeded(params: {
     if (Number.isFinite(immUntil) && (immUntil || 0) > 0) {
       writeMaskUntil(IMMUNITY_KEY, immUntil!, { messageId: id });
     }
+    // Make sibling tabs on the same device show the overlay & reload too
+    broadcastHandoff(reason);
   } catch {}
   // Small delay to allow BC/storage events to flush, then reload.
   scheduleHardReload(reason, 120);
+}
+
+function GlobalLoadingMask() {
+  const snap = useSnap();
+  const [active, setActive] = React.useState(false);
+  const [started, setStarted] = React.useState(0);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const arm = () => {
+      if (!active) { setActive(true); setStarted(Date.now()); }
+      if (!(window as any).__meowtReloadScheduled) {
+        scheduleHardReload("handoff", 140);
+      }
+    };
+
+    const onLocal = () => arm();
+    window.addEventListener("meowt:handoff", onLocal as any);
+
+    const onStorage = (ev: StorageEvent) => {
+      if (ev.key !== HANDOFF_LS_KEY || !ev.newValue) return;
+      arm();
+    };
+    window.addEventListener("storage", onStorage);
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel("meowt-sync-v1");
+      const onMsg = (evt: MessageEvent) => {
+        if (evt?.data?.t === "handoff") arm();
+      };
+      bc.addEventListener("message", onMsg as any);
+    } catch {}
+
+    return () => {
+      window.removeEventListener("meowt:handoff", onLocal as any);
+      window.removeEventListener("storage", onStorage);
+      try { bc?.close(); } catch {}
+    };
+  }, [active]);
+
+  React.useEffect(() => {
+    if (!active) return;
+    const y = window.scrollY;
+    const prev = {
+      position: document.body.style.position,
+      top: document.body.style.top,
+      width: document.body.style.width,
+      overflow: document.body.style.overflow,
+    };
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${y}px`;
+    document.body.style.width = "100%";
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.position = prev.position;
+      document.body.style.top = prev.top;
+      document.body.style.width = prev.width;
+      document.body.style.overflow = prev.overflow;
+      window.scrollTo(0, y);
+    };
+  }, [active]);
+
+  React.useEffect(() => {
+    if (!active) return;
+    if (!snap.rehydrationComplete || snap.loading) return;
+    const elapsed = Date.now() - started;
+    const wait = Math.max(0, HANDOFF_MIN_HOLD_MS - elapsed);
+    const to = setTimeout(() => setActive(false), wait);
+    return () => clearTimeout(to);
+  }, [active, snap.rehydrationComplete, snap.loading, started]);
+
+  if (!active) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[999999] bg-black/90 flex items-center justify-center">
+      <div className="px-4 py-2 rounded-lg bg-black/70 ring-1 ring-white/10 text-white text-sm font-semibold shadow">
+        Loading…
+      </div>
+    </div>,
+    document.body
+  );
 }
 
 function emitMaskUpdate(key: string, until: number, messageId?: string) {
@@ -1794,6 +1904,11 @@ function useGameSnapshot() {
       }
 
       idHoldUntilRef.current = Date.now() + ID_CHANGE_HOLD_MS; // (hold stays in ms)
+      // New active id — show overlay & take the same path on non-author tabs/devices
+      emitLocalHandoff("detected");
+      if (!(window as any).__meowtReloadScheduled) {
+        scheduleHardReload("post", 120);
+      }
 
       // Hydrate boost end from LS to avoid "reset to max duration" after refresh.
       const persisted = readBoostEndLS(idBig);
@@ -1848,6 +1963,7 @@ function useGameSnapshot() {
     if (!seenBefore) return; // first hydrate, not a replacement transition
 
     // --- Replacement detected (same id, new start) ---
+    emitLocalHandoff("detected");
     const nowEpoch = Math.floor(Date.now() / 1000);
     const predictedExposureEnd = startTime && B0secs ? startTime + B0secs : 0;
     const predictedGloryEnd = predictedExposureEnd > 0 && winGlory
@@ -1895,6 +2011,10 @@ function useGameSnapshot() {
     // Persist new window ends so refresh immediately restores the correct state.
     if (idBig && idBig !== 0n) {
       writeWindowTimes(idBig, exposureEndRef.current, gloryEndRef.current, immEndRef.current);
+    }
+    // Schedule a single hard reload on tabs that noticed the handoff
+    if (!(window as any).__meowtReloadScheduled) {
+      scheduleHardReload("replace", 120);
     }
   }, [hasId, idBig, startTime, B0secs, winGlory, winPostImm, booting, OPTIMISTIC_SHOW_MS, ID_CHANGE_HOLD_MS, qc]);
 
@@ -2653,6 +2773,8 @@ function PostBoxInner() {
           args: [uriUsed, hash, stakeWei, 0n, 0n, "0x"],
           chainId: TARGET_CHAIN.id,
         });
+        // Show overlay right away on this tab
+        emitLocalHandoff("post");
 
         await confirmThenRefresh(txHash);
 
@@ -2898,6 +3020,8 @@ function ReplaceBoxInner() {
           args: [uriUsed, hash, stakeWei, 0n, 0n, "0x"],
           chainId: TARGET_CHAIN.id,
         });
+        // Show overlay right away on this tab
+        emitLocalHandoff("replace");
 
         await confirmThenRefresh(h);
 
@@ -5458,6 +5582,7 @@ function AppInner() {
       <main className="max-w-3xl mx-auto px-3 pb-14">
         <MaskStorageSync />
         <GameSnapshotProvider>
+          <GlobalLoadingMask />
           <PrefetchRequired />
           <section className="relative z-20 mt-4 flex flex-col gap-6 items-stretch">
             {/* Permanent expiration counter lives above the message box */}
