@@ -2998,6 +2998,34 @@ const MOD_DISARM_LS_KEY = "meowt:mod:disarm";
 // seconds before glory ends to begin masking (hard guard against early flashes)
 const GLORY_MASK_LATCH_PAD = 3;
 
+// --- Per-tab "seen once" flags (sessionStorage) ------------------------------
+// We want each mask (GLORY / MOD / NUKED) to appear exactly once *per tab* for
+// a given on-chain message id. Use sessionStorage (tab-scoped) so other tabs
+// are independent, and so refresh won’t re-show a mask that the tab already saw.
+type MaskKind = "glory" | "mod" | "nuke";
+const MASK_SEEN_PREFIX = "meowt:seen:mask";
+
+function maskSeenKey(kind: MaskKind, msgId: bigint | number | string) {
+  const idStr = String(msgId ?? "");
+  return `${MASK_SEEN_PREFIX}:${kind}:${idStr}`;
+}
+function hasMaskSeen(kind: MaskKind, msgId: bigint | number | string): boolean {
+  if (typeof window === "undefined" || !window.sessionStorage) return false;
+  try {
+    return window.sessionStorage.getItem(maskSeenKey(kind, msgId)) === "1";
+  } catch {
+    return false;
+  }
+}
+function markMaskSeenOnce(kind: MaskKind, msgId: bigint | number | string): void {
+  if (typeof window === "undefined" || !window.sessionStorage) return;
+  try {
+    window.sessionStorage.setItem(maskSeenKey(kind, msgId), "1");
+  } catch {
+    /* ignore */
+  }
+}
+
 let modMaskLatchedIdsRefGlobal: React.MutableRefObject<Set<bigint>> | null = null;
 let maskSuppressionUntil = 0;
 let suppressedMaskTypes = new Set<string>();
@@ -3322,7 +3350,17 @@ function ActiveCard() {
       return now >= maskEnd ? false : prev;
     });
   }, [gloryMaskEligible, maskEnd, now]);
-  const showGloryMask = gloryMaskLatched;
+  const glorySeenId =
+    gloryMaskMessageIdRef.current && gloryMaskMessageIdRef.current !== 0n
+      ? gloryMaskMessageIdRef.current
+      : msgId;
+  const showGloryMask =
+    gloryMaskLatched && !(glorySeenId && hasMaskSeen("glory", glorySeenId));
+  React.useEffect(() => {
+    if (showGloryMask && glorySeenId && glorySeenId !== 0n) {
+      markMaskSeenOnce("glory", glorySeenId);
+    }
+  }, [showGloryMask, glorySeenId]);
   const gloryMaskLeft = showGloryMask
     ? Math.max(0, Math.min(rawLeft, MASK_SECS + GLORY_MASK_LATCH_PAD))
     : 0;
@@ -3859,9 +3897,34 @@ function ActiveCard() {
     hadActiveRef.current = hasActive;
   }, [msgId, hasActive, publicClient, NUKE_MASK_SECS]);
 
-  const showModMask =
+  const modMaskActive =
     now < modMaskUntilRef.current && !masksSuppressed(MOD_MASK_KEY);
-  const showNukeMask = !showModMask && now < nukeMaskUntilRef.current;
+  const modSeenId =
+    modMaskMessageIdRef.current && modMaskMessageIdRef.current !== 0n
+      ? modMaskMessageIdRef.current
+      : msgId;
+  const showModMask =
+    modMaskActive && !(modSeenId && hasMaskSeen("mod", modSeenId));
+  React.useEffect(() => {
+    if (showModMask && modSeenId && modSeenId !== 0n) {
+      markMaskSeenOnce("mod", modSeenId);
+    }
+  }, [showModMask, modSeenId]);
+  const showNukeMaskBase =
+    !modMaskActive &&
+    now < nukeMaskUntilRef.current &&
+    !masksSuppressed(NUKE_MASK_KEY);
+  const nukeSeenId =
+    nukeMaskMessageIdRef.current && nukeMaskMessageIdRef.current !== 0n
+      ? nukeMaskMessageIdRef.current
+      : msgId;
+  const showNukeMask =
+    showNukeMaskBase && !(nukeSeenId && hasMaskSeen("nuke", nukeSeenId));
+  React.useEffect(() => {
+    if (showNukeMask && nukeSeenId && nukeSeenId !== 0n) {
+      markMaskSeenOnce("nuke", nukeSeenId);
+    }
+  }, [showNukeMask, nukeSeenId]);
   const modMaskLeft = showModMask
     ? Math.max(0, Math.floor(modMaskUntilRef.current - now))
     : 0;
