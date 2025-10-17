@@ -3093,11 +3093,6 @@ function readModDisarmLS(): { id: string; until: number } | null {
   return null;
 }
 
-function clearModDisarmLS() {
-  try {
-    localStorage.removeItem(MOD_DISARM_LS_KEY);
-  } catch {}
-}
 function suppressMasksFor(seconds: number, types: string[] = []) {
   const nowS = Math.floor(Date.now() / 1000);
   const next = nowS + Math.max(0, seconds);
