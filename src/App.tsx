@@ -3376,9 +3376,22 @@ function ActiveCard() {
   if (gloryIdChanged) {
     showingGloryRef.current = false;
   }
-  const showGloryMask =
-    gloryWindowActive &&
-    (!gloryAlreadySeen || showingGloryRef.current || persistedGloryActive || gloryIdChanged);
+  // Only use "seen" to gate the rising edge; once showing, stay on until mask end.
+  let showGloryMask = false;
+  if (gloryWindowActive) {
+    const stillActive = maskEnd > 0 && now < maskEnd;
+    const wantStart = !gloryAlreadySeen || gloryIdChanged;
+    if (
+      (showingGloryRef.current && stillActive) ||
+      wantStart ||
+      persistedGloryActive
+    ) {
+      showGloryMask = true;
+    }
+  } else {
+    showingGloryRef.current = false;
+    showingGloryIdRef.current = 0n;
+  }
   React.useEffect(() => {
     if (showGloryMask) {
       if (!showingGloryRef.current) {
@@ -3945,9 +3958,18 @@ function ActiveCard() {
   if (modIdChanged) {
     showingModRef.current = false;
   }
-  const showModMask =
-    modMaskActive &&
-    (!modAlreadySeen || showingModRef.current || persistedModActive || modIdChanged);
+  // Same rising-edge semantics: "seen" only blocks the start, never an active mask.
+  let showModMask = false;
+  if (modMaskActive) {
+    const stillActive = modMaskUntilRef.current > 0 && now < modMaskUntilRef.current;
+    const wantStart = !modAlreadySeen || modIdChanged;
+    if ((showingModRef.current && stillActive) || wantStart || persistedModActive) {
+      showModMask = true;
+    }
+  } else {
+    showingModRef.current = false;
+    showingModIdRef.current = 0n;
+  }
   React.useEffect(() => {
     if (showModMask) {
       if (!showingModRef.current) {
@@ -3979,9 +4001,19 @@ function ActiveCard() {
   if (nukeIdChanged) {
     showingNukeRef.current = false;
   }
-  const showNukeMask =
-    showNukeMaskBase &&
-    (!nukeAlreadySeen || showingNukeRef.current || persistedNukeActive || nukeIdChanged);
+  // Same rule for nukes: once displayed, keep it through the scheduled until.
+  let showNukeMask = false;
+  if (showNukeMaskBase) {
+    const stillActive =
+      nukeMaskUntilRef.current > 0 && now < nukeMaskUntilRef.current;
+    const wantStart = !nukeAlreadySeen || nukeIdChanged;
+    if ((showingNukeRef.current && stillActive) || wantStart || persistedNukeActive) {
+      showNukeMask = true;
+    }
+  } else {
+    showingNukeRef.current = false;
+    showingNukeIdRef.current = 0n;
+  }
   React.useEffect(() => {
     if (showNukeMask) {
       if (!showingNukeRef.current) {
