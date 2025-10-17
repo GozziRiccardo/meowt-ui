@@ -3140,6 +3140,34 @@ function ActiveCard() {
   // --- vote state / gating ---
   const msgId: bigint = (snap as any)?.id ?? 0n;
   const currentMessage = (snap as any)?.m ?? null;
+  const [modFrozenMessage, setModFrozenMessage] =
+    React.useState<{ id: bigint; message: any } | null>(null);
+  const startStamp = React.useMemo(() => {
+    const baseMessage =
+      modFrozenMessage && modFrozenMessage.id === msgId
+        ? modFrozenMessage.message
+        : currentMessage;
+    const rawStart =
+      (baseMessage as any)?.startTime !== undefined
+        ? (baseMessage as any).startTime
+        : (baseMessage as any)?.[3];
+    if (typeof rawStart === "bigint") {
+      return rawStart.toString();
+    }
+    if (typeof rawStart === "number" && Number.isFinite(rawStart)) {
+      const normalized = Math.max(0, Math.floor(rawStart));
+      return BigInt(normalized).toString();
+    }
+    if (typeof rawStart === "string") {
+      try {
+        const parsed = BigInt(rawStart);
+        if (parsed >= 0) return parsed.toString();
+      } catch {
+        /* ignore */
+      }
+    }
+    return "0";
+  }, [currentMessage, modFrozenMessage, msgId]);
   const [latchedModId, setLatchedModId] = React.useState<bigint>(0n);
   React.useEffect(() => {
     if (msgId && msgId !== 0n) {
@@ -3362,7 +3390,8 @@ function ActiveCard() {
       ? gloryMaskMessageIdRef.current
       : msgId;
   const gloryId = glorySeenId ?? 0n;
-  const gloryAlreadySeen = gloryId ? hasMaskSeen("glory", gloryId) : false;
+  const glorySeenToken = gloryId ? `${gloryId.toString()}@${startStamp}` : undefined;
+  const gloryAlreadySeen = glorySeenToken ? hasMaskSeen("glory", glorySeenToken) : false;
   const persistedGloryActive =
     maskEnd > 0 &&
     now < maskEnd &&
@@ -3401,15 +3430,15 @@ function ActiveCard() {
       if (!showingGloryRef.current) {
         showingGloryRef.current = true;
         showingGloryIdRef.current = gloryId;
-        if (gloryId && gloryId !== 0n) {
-          markMaskSeenOnce("glory", gloryId);
+        if (glorySeenToken) {
+          markMaskSeenOnce("glory", glorySeenToken);
         }
       }
     } else {
       showingGloryRef.current = false;
       showingGloryIdRef.current = 0n;
     }
-  }, [showGloryMask, gloryId]);
+  }, [showGloryMask, gloryId, glorySeenToken]);
   const gloryMaskLeft = showGloryMask
     ? Math.max(0, Math.min(rawLeft, MASK_SECS + GLORY_MASK_LATCH_PAD))
     : 0;
@@ -3505,8 +3534,6 @@ function ActiveCard() {
     };
   }, rehydrateMasksOnResumeDeps);
   const lastActiveMessageRef = React.useRef<{ id: bigint; message: any } | null>(null);
-  const [modFrozenMessage, setModFrozenMessage] =
-    React.useState<{ id: bigint; message: any } | null>(null);
   const realtimeNukeIdRef = React.useRef<bigint>(0n);
   const realtimeNukeSeenRef = React.useRef(false);
   const modDisarmIdRef = React.useRef<bigint>(0n);
@@ -3953,7 +3980,8 @@ function ActiveCard() {
       ? modMaskMessageIdRef.current
       : msgId;
   const modId = modSeenId ?? 0n;
-  const modAlreadySeen = modId ? hasMaskSeen("mod", modId) : false;
+  const modSeenToken = modId ? `${modId.toString()}@${startStamp}` : undefined;
+  const modAlreadySeen = modSeenToken ? hasMaskSeen("mod", modSeenToken) : false;
   const persistedModActive =
     modMaskActive &&
     Boolean(modMaskMessageIdRef.current && modMaskMessageIdRef.current !== 0n) &&
@@ -3980,15 +4008,15 @@ function ActiveCard() {
       if (!showingModRef.current) {
         showingModRef.current = true;
         showingModIdRef.current = modId;
-        if (modId && modId !== 0n) {
-          markMaskSeenOnce("mod", modId);
+        if (modSeenToken) {
+          markMaskSeenOnce("mod", modSeenToken);
         }
       }
     } else {
       showingModRef.current = false;
       showingModIdRef.current = 0n;
     }
-  }, [showModMask, modId]);
+  }, [showModMask, modId, modSeenToken]);
   const nukeMaskActive =
     now < nukeMaskUntilRef.current && !masksSuppressed(NUKE_MASK_KEY);
   const showNukeMaskBase = !showModMask && nukeMaskActive;
@@ -3997,7 +4025,8 @@ function ActiveCard() {
       ? nukeMaskMessageIdRef.current
       : msgId;
   const nukeId = nukeSeenId ?? 0n;
-  const nukeAlreadySeen = nukeId ? hasMaskSeen("nuke", nukeId) : false;
+  const nukeSeenToken = nukeId ? `${nukeId.toString()}@${startStamp}` : undefined;
+  const nukeAlreadySeen = nukeSeenToken ? hasMaskSeen("nuke", nukeSeenToken) : false;
   const persistedNukeActive =
     nukeMaskActive &&
     Boolean(nukeMaskMessageIdRef.current && nukeMaskMessageIdRef.current !== 0n) &&
@@ -4025,15 +4054,15 @@ function ActiveCard() {
       if (!showingNukeRef.current) {
         showingNukeRef.current = true;
         showingNukeIdRef.current = nukeId;
-        if (nukeId && nukeId !== 0n) {
-          markMaskSeenOnce("nuke", nukeId);
+        if (nukeSeenToken) {
+          markMaskSeenOnce("nuke", nukeSeenToken);
         }
       }
     } else {
       showingNukeRef.current = false;
       showingNukeIdRef.current = 0n;
     }
-  }, [showNukeMask, nukeId]);
+  }, [showNukeMask, nukeId, nukeSeenToken]);
   const modMaskLeft = showModMask
     ? Math.max(0, Math.floor(modMaskUntilRef.current - now))
     : 0;
