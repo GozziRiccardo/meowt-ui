@@ -3372,15 +3372,19 @@ function ActiveCard() {
     gloryMaskMessageIdRef.current === msgId;
   const gloryWindowActive =
     gloryMaskLatched || gloryMaskEligible || persistedGloryActive;
-  const gloryIdChanged = gloryId !== 0n && showingGloryIdRef.current !== gloryId;
-  if (gloryIdChanged) {
+  // Only consider ID changes while the overlay is currently showing
+  const gloryIdChangedWhileShowing =
+    gloryId !== 0n && showingGloryRef.current && showingGloryIdRef.current !== gloryId;
+  if (gloryIdChangedWhileShowing) {
+    // Allow a new rising edge for a mid-display swap
     showingGloryRef.current = false;
   }
   // Only use "seen" to gate the rising edge; once showing, stay on until mask end.
   let showGloryMask = false;
   if (gloryWindowActive) {
     const stillActive = maskEnd > 0 && now < maskEnd;
-    const wantStart = !gloryAlreadySeen || gloryIdChanged;
+    // Only override dedupe if the ID changed while we were already showing
+    const wantStart = !gloryAlreadySeen || gloryIdChangedWhileShowing;
     if (
       (showingGloryRef.current && stillActive) ||
       wantStart ||
@@ -3954,15 +3958,16 @@ function ActiveCard() {
     modMaskActive &&
     Boolean(modMaskMessageIdRef.current && modMaskMessageIdRef.current !== 0n) &&
     (!modSeenId || modMaskMessageIdRef.current === modSeenId);
-  const modIdChanged = modId !== 0n && showingModIdRef.current !== modId;
-  if (modIdChanged) {
+  const modIdChangedWhileShowing =
+    modId !== 0n && showingModRef.current && showingModIdRef.current !== modId;
+  if (modIdChangedWhileShowing) {
     showingModRef.current = false;
   }
   // Same rising-edge semantics: "seen" only blocks the start, never an active mask.
   let showModMask = false;
   if (modMaskActive) {
     const stillActive = modMaskUntilRef.current > 0 && now < modMaskUntilRef.current;
-    const wantStart = !modAlreadySeen || modIdChanged;
+    const wantStart = !modAlreadySeen || modIdChangedWhileShowing;
     if ((showingModRef.current && stillActive) || wantStart || persistedModActive) {
       showModMask = true;
     }
@@ -3997,8 +4002,9 @@ function ActiveCard() {
     nukeMaskActive &&
     Boolean(nukeMaskMessageIdRef.current && nukeMaskMessageIdRef.current !== 0n) &&
     (!nukeSeenId || nukeMaskMessageIdRef.current === nukeSeenId);
-  const nukeIdChanged = nukeId !== 0n && showingNukeIdRef.current !== nukeId;
-  if (nukeIdChanged) {
+  const nukeIdChangedWhileShowing =
+    nukeId !== 0n && showingNukeRef.current && showingNukeIdRef.current !== nukeId;
+  if (nukeIdChangedWhileShowing) {
     showingNukeRef.current = false;
   }
   // Same rule for nukes: once displayed, keep it through the scheduled until.
@@ -4006,7 +4012,7 @@ function ActiveCard() {
   if (showNukeMaskBase) {
     const stillActive =
       nukeMaskUntilRef.current > 0 && now < nukeMaskUntilRef.current;
-    const wantStart = !nukeAlreadySeen || nukeIdChanged;
+    const wantStart = !nukeAlreadySeen || nukeIdChangedWhileShowing;
     if ((showingNukeRef.current && stillActive) || wantStart || persistedNukeActive) {
       showNukeMask = true;
     }
