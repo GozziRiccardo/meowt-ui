@@ -1354,6 +1354,16 @@ function useGameSnapshot() {
   const hasId = typeof id === "bigint" && id !== 0n;
   const idBig = hasId ? (id as bigint) : 0n;
 
+  React.useEffect(() => {
+    if (!hasId || !idBig || idBig === 0n) return;
+    try {
+      localStorage.setItem(
+        LAST_ID_LS_KEY,
+        JSON.stringify({ id: idBig.toString(), ts: Date.now() })
+      );
+    } catch {}
+  }, [hasId, idBig]);
+
   // -------- Batched reads --------
   const { data: raw, isFetching: rawFetching } = useReadContracts({
     allowFailure: true,
@@ -3032,6 +3042,7 @@ let modMaskLatchedIdsRefGlobal: React.MutableRefObject<Set<bigint>> | null = nul
 let maskSuppressionUntil = 0;
 let suppressedMaskTypes = new Set<string>();
 const MASK_SUPPRESS_LS_KEY = "meowt:mask:suppress";
+const LAST_ID_LS_KEY = "meowt:last-active-id";
 
 function writeModDisarmLS(id: bigint | number | string, untilEpochSec: number) {
   try {
@@ -3124,31 +3135,35 @@ function extendMaskSuppression(seconds: number) {
 }
 function masksSuppressed(type?: string): boolean {
   const now = Math.floor(Date.now() / 1000);
-  // First, honor in-memory suppression
-  const memActive =
-    maskSuppressionUntil > now &&
-    (suppressedMaskTypes.has("*") || suppressedMaskTypes.size > 0);
-  if (memActive) {
+
+  // In-memory check first
+  if (maskSuppressionUntil > now && (suppressedMaskTypes.has("*") || suppressedMaskTypes.size > 0)) {
     if (!type) return true;
     if (suppressedMaskTypes.has("*")) return true;
     return suppressedMaskTypes.has(type);
   }
-  // Cross-tab: honor persisted suppression
+
+  // Persisted (cross-tab) check
   try {
     const raw = localStorage.getItem(MASK_SUPPRESS_LS_KEY);
     if (!raw) return false;
+
     const parsed = JSON.parse(raw);
     const until = Number(parsed?.until) || 0;
-    const list: string[] = Array.isArray(parsed?.types) ? parsed.types : [];
     if (until <= now) {
-      // clean-up expired
       localStorage.removeItem(MASK_SUPPRESS_LS_KEY);
       return false;
     }
+
+    const list: string[] = Array.isArray(parsed?.types) ? parsed.types : [];
     const set = new Set(list);
-    if (!type) return set.size > 0;
+
+    // If the types array is missing/empty (old builds), treat as NO suppression.
+    if (set.size === 0) return false;
+
+    if (!type) return true;
     if (set.has("*")) return true;
-    return set.size === 0 ? true : set.has(type);
+    return set.has(type);
   } catch {
     return false;
   }
@@ -3277,12 +3292,8 @@ function ActiveCard() {
   const glorySec = Number((snap as any)?.gloryRem ?? 0);
   const MASK_SECS = Number((snap as any)?.winFreeze ?? 11);
 
-  const computeNow = React.useCallback(() => {
-    const snapNow = Number((snap as any)?.nowSec ?? 0);
-    if (Number.isFinite(snapNow) && snapNow > 0) return Math.floor(snapNow);
-    return Math.floor(Date.now() / 1000);
-  }, [snap]);
-  const [now, setNow] = React.useState(() => computeNow());
+  const wallNow = () => Math.floor(Date.now() / 1000);
+  const [now, setNow] = React.useState<number>(wallNow());
   const rehydrateMasksOnResumeDeps = [glorySec, MASK_SECS]; // only for eslint happiness
   // For cross-tab clamping: visible glory mask should never exceed freeze + pad
   const GLORY_MASK_MAX_SPAN = Math.max(0, MASK_SECS + GLORY_MASK_LATCH_PAD);
@@ -3293,17 +3304,9 @@ function ActiveCard() {
     gloryMaskSpanRef.current = GLORY_MASK_MAX_SPAN;
   }, [MASK_SECS, GLORY_MASK_MAX_SPAN]);
   React.useEffect(() => {
-    const tick = () => setNow(computeNow());
-    tick();
-    const iv = setInterval(tick, 500);
+    const iv = setInterval(() => setNow(wallNow()), 500);
     return () => clearInterval(iv);
-  }, [computeNow]);
-  React.useEffect(() => {
-    if (typeof document === "undefined") return;
-    const onVis = () => setNow(computeNow());
-    document.addEventListener("visibilitychange", onVis);
-    return () => document.removeEventListener("visibilitychange", onVis);
-  }, [computeNow]);
+  }, []);
 
   // ========= POST-GLORY FREEZE MASK (clamped & de-flickered) =========
   // IMPORTANT: clamp persisted glory mask strictly to what we actually show:
@@ -3987,6 +3990,24 @@ function ActiveCard() {
       /* ignore */
     }
   }
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (hasActive) return;
+    if (!publicClient) return;
+    try {
+      const raw = localStorage.getItem(LAST_ID_LS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { id?: string; ts?: number };
+      const ts = Number(parsed?.ts || 0);
+      if (!parsed?.id || !Number.isFinite(ts)) return;
+      if (Date.now() - ts > 2 * 60_000) return;
+      const guess = BigInt(parsed.id);
+      if (guess <= 0n) return;
+      if (modMaskUntilRef.current > now || nukeMaskUntilRef.current > now) return;
+      probeResolution(guess);
+    } catch {}
+  }, [hasActive, now, publicClient]);
 
   React.useEffect(() => {
     if (!hasActive || !currentMessage || !msgId || msgId === 0n) return;
