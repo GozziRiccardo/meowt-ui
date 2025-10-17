@@ -841,7 +841,6 @@ function two(x?: number) { return typeof x === "number" && Number.isFinite(x) ? 
 // -------------------- Permanent expiration counter (centered above message) --------------------
 /**
  * Always-visible expiration countdown (only tracks exposure/expiration time).
- * - Ignores other windows (boost/glory/immunity) by design.
  * - Consumes `snap.rem` and renders "Time left: M:SS" next to the time-mascot.
  * - Renders above the message box, centered.
  */
@@ -852,6 +851,12 @@ function PermanentTimerBar() {
   const rem = Number(remRaw);
 
   if (!Number.isFinite(rem) || rem <= 0) return null;
+
+  const chipClasses = [
+    "px-4 py-2 rounded-full shadow flex items-center gap-3",
+    "bg-rose-600 text-white ring-1 ring-rose-700/40",
+    "text-lg md:text-xl font-extrabold tracking-wide",
+  ].join(" ");
 
   // Keep it compact but visible; group is centered
   return (
@@ -868,14 +873,7 @@ function PermanentTimerBar() {
           className="h-14 md:h-16 w-auto object-contain pointer-events-none select-none"
           draggable={false}
         />
-        <div
-          className={[
-            "px-4 py-2 rounded-full shadow flex items-center gap-3",
-            "bg-rose-600 text-white",
-            "text-lg md:text-xl font-extrabold tracking-wide",
-            "ring-1 ring-rose-700/40",
-          ].join(" ")}
-        >
+        <div className={chipClasses}>
           <span className="tabular-nums">{fmtClock(rem)}</span>
         </div>
       </div>
@@ -2844,6 +2842,7 @@ function PostBoxInner() {
           }
         } catch {}
 
+        nudgeQueries(qc, [0]);
         nudgeQueries(qc, [0, 500, 1500]);
         writeMaskUntil(GLORY_MASK_KEY, 0);
       });
@@ -3087,6 +3086,7 @@ function ReplaceBoxInner() {
           }
         } catch { /* best effort */ }
 
+        nudgeQueries(qc, [0]);
         nudgeQueries(qc, [0, 500, 1500]);
         writeMaskUntil(GLORY_MASK_KEY, 0);
       });
