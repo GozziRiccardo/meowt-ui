@@ -3029,6 +3029,7 @@ function markMaskSeenOnce(kind: MaskKind, msgId: bigint | number | string): void
 let modMaskLatchedIdsRefGlobal: React.MutableRefObject<Set<bigint>> | null = null;
 let maskSuppressionUntil = 0;
 let suppressedMaskTypes = new Set<string>();
+const MASK_SUPPRESS_LS_KEY = "meowt:mask:suppress";
 
 function writeModDisarmLS(id: bigint | number | string, untilEpochSec: number) {
   try {
@@ -3065,29 +3066,90 @@ function clearModDisarmLS() {
   } catch {}
 }
 function suppressMasksFor(seconds: number, types: string[] = []) {
-  const next = Math.floor(Date.now() / 1000) + Math.max(0, seconds);
+  const nowS = Math.floor(Date.now() / 1000);
+  const next = nowS + Math.max(0, seconds);
   maskSuppressionUntil = Math.max(maskSuppressionUntil, next);
   if (types.length === 0) {
     suppressedMaskTypes.add("*");
   } else {
     types.forEach((t) => suppressedMaskTypes.add(t));
   }
+  // Cross-tab: persist suppression window & union types
+  try {
+    const raw = localStorage.getItem(MASK_SUPPRESS_LS_KEY);
+    let prevUntil = 0;
+    let prevTypes: string[] = [];
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        prevUntil = Number(parsed?.until) || 0;
+        prevTypes = Array.isArray(parsed?.types) ? parsed.types : [];
+      } catch {}
+    }
+    const outUntil = Math.max(prevUntil, next);
+    const outTypes = new Set(prevTypes);
+    if (types.length === 0) outTypes.add("*");
+    else types.forEach((t) => outTypes.add(t));
+    localStorage.setItem(
+      MASK_SUPPRESS_LS_KEY,
+      JSON.stringify({ until: outUntil, types: Array.from(outTypes) })
+    );
+  } catch {}
 }
 function extendMaskSuppression(seconds: number) {
   if (maskSuppressionUntil <= 0) return;
-  const next = Math.floor(Date.now() / 1000) + Math.max(0, seconds);
+  const nowS = Math.floor(Date.now() / 1000);
+  const next = nowS + Math.max(0, seconds);
   maskSuppressionUntil = Math.max(maskSuppressionUntil, next);
+  // Cross-tab: extend persisted suppression too
+  try {
+    const raw = localStorage.getItem(MASK_SUPPRESS_LS_KEY);
+    let prevUntil = 0;
+    let prevTypes: string[] = [];
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        prevUntil = Number(parsed?.until) || 0;
+        prevTypes = Array.isArray(parsed?.types) ? parsed.types : [];
+      } catch {}
+    }
+    const outUntil = Math.max(prevUntil, next);
+    localStorage.setItem(
+      MASK_SUPPRESS_LS_KEY,
+      JSON.stringify({ until: outUntil, types: prevTypes })
+    );
+  } catch {}
 }
 function masksSuppressed(type?: string): boolean {
   const now = Math.floor(Date.now() / 1000);
-  if (maskSuppressionUntil <= now) {
-    maskSuppressionUntil = 0;
-    if (suppressedMaskTypes.size > 0) suppressedMaskTypes.clear();
+  // First, honor in-memory suppression
+  const memActive =
+    maskSuppressionUntil > now &&
+    (suppressedMaskTypes.has("*") || suppressedMaskTypes.size > 0);
+  if (memActive) {
+    if (!type) return true;
+    if (suppressedMaskTypes.has("*")) return true;
+    return suppressedMaskTypes.has(type);
+  }
+  // Cross-tab: honor persisted suppression
+  try {
+    const raw = localStorage.getItem(MASK_SUPPRESS_LS_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    const until = Number(parsed?.until) || 0;
+    const list: string[] = Array.isArray(parsed?.types) ? parsed.types : [];
+    if (until <= now) {
+      // clean-up expired
+      localStorage.removeItem(MASK_SUPPRESS_LS_KEY);
+      return false;
+    }
+    const set = new Set(list);
+    if (!type) return set.size > 0;
+    if (set.has("*")) return true;
+    return set.size === 0 ? true : set.has(type);
+  } catch {
     return false;
   }
-  if (suppressedMaskTypes.has("*")) return true;
-  if (!type) return suppressedMaskTypes.size > 0;
-  return suppressedMaskTypes.has(type);
 }
 
 function MaskStorageSync() {
@@ -3672,6 +3734,10 @@ function ActiveCard() {
           }
           if (capped <= nowS) {
             modMaskLatchedIdsRef.current.clear();
+            // 🛡️ Cross-tab: when a peer clears MOD, also disarm this id briefly
+            if (id > 0n) {
+              writeModDisarmLS(id, nowS + MOD_RETRIGGER_DEBOUNCE_SECS);
+            }
           }
         } else if (ev.key === NUKE_MASK_KEY) {
           nukeMaskUntilRef.current =
