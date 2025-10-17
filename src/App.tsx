@@ -3353,12 +3353,16 @@ function ActiveCard() {
   const showingGloryRef = React.useRef(false);
   const showingModRef = React.useRef(false);
   const showingNukeRef = React.useRef(false);
+  const showingGloryIdRef = React.useRef<bigint>(0n);
+  const showingModIdRef = React.useRef<bigint>(0n);
+  const showingNukeIdRef = React.useRef<bigint>(0n);
 
   const glorySeenId =
     gloryMaskMessageIdRef.current && gloryMaskMessageIdRef.current !== 0n
       ? gloryMaskMessageIdRef.current
       : msgId;
-  const gloryAlreadySeen = glorySeenId ? hasMaskSeen("glory", glorySeenId) : false;
+  const gloryId = glorySeenId ?? 0n;
+  const gloryAlreadySeen = gloryId ? hasMaskSeen("glory", gloryId) : false;
   const persistedGloryActive =
     maskEnd > 0 &&
     now < maskEnd &&
@@ -3368,21 +3372,27 @@ function ActiveCard() {
     gloryMaskMessageIdRef.current === msgId;
   const gloryWindowActive =
     gloryMaskLatched || gloryMaskEligible || persistedGloryActive;
+  const gloryIdChanged = gloryId !== 0n && showingGloryIdRef.current !== gloryId;
+  if (gloryIdChanged) {
+    showingGloryRef.current = false;
+  }
   const showGloryMask =
     gloryWindowActive &&
-    (!gloryAlreadySeen || showingGloryRef.current || persistedGloryActive);
+    (!gloryAlreadySeen || showingGloryRef.current || persistedGloryActive || gloryIdChanged);
   React.useEffect(() => {
     if (showGloryMask) {
       if (!showingGloryRef.current) {
         showingGloryRef.current = true;
-        if (glorySeenId && glorySeenId !== 0n) {
-          markMaskSeenOnce("glory", glorySeenId);
+        showingGloryIdRef.current = gloryId;
+        if (gloryId && gloryId !== 0n) {
+          markMaskSeenOnce("glory", gloryId);
         }
       }
     } else {
       showingGloryRef.current = false;
+      showingGloryIdRef.current = 0n;
     }
-  }, [showGloryMask, glorySeenId]);
+  }, [showGloryMask, gloryId]);
   const gloryMaskLeft = showGloryMask
     ? Math.max(0, Math.min(rawLeft, MASK_SECS + GLORY_MASK_LATCH_PAD))
     : 0;
@@ -3925,26 +3935,33 @@ function ActiveCard() {
     modMaskMessageIdRef.current && modMaskMessageIdRef.current !== 0n
       ? modMaskMessageIdRef.current
       : msgId;
-  const modAlreadySeen = modSeenId ? hasMaskSeen("mod", modSeenId) : false;
+  const modId = modSeenId ?? 0n;
+  const modAlreadySeen = modId ? hasMaskSeen("mod", modId) : false;
   const persistedModActive =
     modMaskActive &&
     Boolean(modMaskMessageIdRef.current && modMaskMessageIdRef.current !== 0n) &&
     (!modSeenId || modMaskMessageIdRef.current === modSeenId);
+  const modIdChanged = modId !== 0n && showingModIdRef.current !== modId;
+  if (modIdChanged) {
+    showingModRef.current = false;
+  }
   const showModMask =
     modMaskActive &&
-    (!modAlreadySeen || showingModRef.current || persistedModActive);
+    (!modAlreadySeen || showingModRef.current || persistedModActive || modIdChanged);
   React.useEffect(() => {
     if (showModMask) {
       if (!showingModRef.current) {
         showingModRef.current = true;
-        if (modSeenId && modSeenId !== 0n) {
-          markMaskSeenOnce("mod", modSeenId);
+        showingModIdRef.current = modId;
+        if (modId && modId !== 0n) {
+          markMaskSeenOnce("mod", modId);
         }
       }
     } else {
       showingModRef.current = false;
+      showingModIdRef.current = 0n;
     }
-  }, [showModMask, modSeenId]);
+  }, [showModMask, modId]);
   const nukeMaskActive =
     now < nukeMaskUntilRef.current && !masksSuppressed(NUKE_MASK_KEY);
   const showNukeMaskBase = !showModMask && nukeMaskActive;
@@ -3952,26 +3969,33 @@ function ActiveCard() {
     nukeMaskMessageIdRef.current && nukeMaskMessageIdRef.current !== 0n
       ? nukeMaskMessageIdRef.current
       : msgId;
-  const nukeAlreadySeen = nukeSeenId ? hasMaskSeen("nuke", nukeSeenId) : false;
+  const nukeId = nukeSeenId ?? 0n;
+  const nukeAlreadySeen = nukeId ? hasMaskSeen("nuke", nukeId) : false;
   const persistedNukeActive =
     nukeMaskActive &&
     Boolean(nukeMaskMessageIdRef.current && nukeMaskMessageIdRef.current !== 0n) &&
     (!nukeSeenId || nukeMaskMessageIdRef.current === nukeSeenId);
+  const nukeIdChanged = nukeId !== 0n && showingNukeIdRef.current !== nukeId;
+  if (nukeIdChanged) {
+    showingNukeRef.current = false;
+  }
   const showNukeMask =
     showNukeMaskBase &&
-    (!nukeAlreadySeen || showingNukeRef.current || persistedNukeActive);
+    (!nukeAlreadySeen || showingNukeRef.current || persistedNukeActive || nukeIdChanged);
   React.useEffect(() => {
     if (showNukeMask) {
       if (!showingNukeRef.current) {
         showingNukeRef.current = true;
-        if (nukeSeenId && nukeSeenId !== 0n) {
-          markMaskSeenOnce("nuke", nukeSeenId);
+        showingNukeIdRef.current = nukeId;
+        if (nukeId && nukeId !== 0n) {
+          markMaskSeenOnce("nuke", nukeId);
         }
       }
     } else {
       showingNukeRef.current = false;
+      showingNukeIdRef.current = 0n;
     }
-  }, [showNukeMask, nukeSeenId]);
+  }, [showNukeMask, nukeId]);
   const modMaskLeft = showModMask
     ? Math.max(0, Math.floor(modMaskUntilRef.current - now))
     : 0;
