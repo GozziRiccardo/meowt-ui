@@ -2995,22 +2995,7 @@ const GLORY_MASK_KEY = "meowt:mask:glory";
 const NUKE_MASK_KEY = "meowt:mask:nuke";
 const MOD_MASK_KEY = "meowt:mask:mod";
 const MOD_DISARM_LS_KEY = "meowt:mod:disarm";
-// seconds before glory ends to begin masking
-const GLORY_MASK_LATCH_PAD = 3;
-
-// -------------------- Per-tab (session) "seen" flags to ensure exactly-once --------------------
-type MaskKind = "glory" | "mod" | "nuke";
-function seenKey(kind: MaskKind, id: bigint | number | string) {
-  return `meowt:seen:mask:${kind}:${String(id)}`;
-}
-function hasSeenMask(kind: MaskKind, id: bigint | number | string): boolean {
-  if (!id || String(id) === "0") return false;
-  try { return sessionStorage.getItem(seenKey(kind, id)) === "1"; } catch { return false; }
-}
-function markSeenMask(kind: MaskKind, id: bigint | number | string) {
-  if (!id || String(id) === "0") return;
-  try { sessionStorage.setItem(seenKey(kind, id), "1"); } catch {}
-}
+const GLORY_MASK_LATCH_PAD = 2; // seconds before glory ends to begin masking
 
 let modMaskLatchedIdsRefGlobal: React.MutableRefObject<Set<bigint>> | null = null;
 let maskSuppressionUntil = 0;
